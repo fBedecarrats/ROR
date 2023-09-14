@@ -7,6 +7,13 @@ editor_options:
   chunk_output_type: console
 ---
 
+```{r}
+library(tidyverse)
+library(haven)
+library(labelled)
+```
+
+
 
 ```{r}
 deb_files <- list.files(path = "enter", pattern = "res_deb", 
@@ -14,6 +21,66 @@ deb_files <- list.files(path = "enter", pattern = "res_deb",
                         full.names = TRUE) %>%
   str_subset("stunicode", negate = TRUE)
 
-deb_files
+# A function to select only fields which names or label includes string sequence
+dta_select_matches <- function(deb_file_path, retain_matches) {
+  data <- read_dta(deb_file_path)
+  retain_pattern <- paste(retain_matches, collapse = "|")
+  var_labels <- var_label(data)
+  selected_vars <- names(data)[str_detect(names(data),
+                                          retain_pattern) | 
+                                 str_detect(var_labels,
+                                            retain_pattern)]
+  selected_data <- data %>%
+    select(all_of(selected_vars))
+  return(selected_data)
+}
+
+location_variables <- c("year", # data collection year
+                        "j0", # observatory code
+                        "obs", # observatorie
+                        "j41", # municipality code
+                        "j42", # municipality name
+                        "j4_code", # village code
+                        "j4", # village name
+                        "code_site") # code site
+
+location_values <- deb_files %>%
+  map(read_dta) %>%
+  map(~ select(.x, any_of(location_variables))) %>%
+  map(unique) %>%
+  bind_rows()
+  
+
+location_values <- deb_files %>%
+  map(dta_select_matches, location_variables) %>%
+  map(to_factor) %>%
+  map(unique)
+
+
+location_values <- deb_files %>%
+  map(read_dta) %>%
+  map(select(any_of, location_variables)) 
+
+
+
+
+my_debs <- deb_files %>%
+  map(read_dta) %>%
+  select(all_of)
+
+my_labels <- my_debs %>%
+  map(var_label)
+
+
+
+deb_select <- var_label(deb_data)  %>%
+  str_detect("campagne|village") 
+
+deb_selected <- deb_data %>%
+  select(all_of(deb_select))
+
+test1_data <- str_detect(test1_names, "campagne|village")
+
+
 ```
 
