@@ -1,0 +1,7 @@
+*.pptx
+do-files/*
+enter/*
+log/*
+merge/*
+*.Rproj
+.Rproj.user
