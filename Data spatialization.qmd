@@ -1,0 +1,19 @@
+---
+title: "Appendix: data spatialization"
+author: "Florent Bédécarrats"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+deb_files <- list.files(path = "enter", pattern = "res_deb", 
+                        recursive = TRUE, 
+                        full.names = TRUE) %>%
+  str_subset("stunicode", negate = TRUE)
+
+deb_files
+```
+
