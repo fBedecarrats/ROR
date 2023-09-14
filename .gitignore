@@ -5,3 +5,4 @@ log/*
 merge/*
 *.Rproj
 .Rproj.user
+data/*

@@ -11,76 +11,98 @@ editor_options:
 library(tidyverse)
 library(haven)
 library(labelled)
+library(geodata)
+library(sf)
+library(stringdist)
 ```
 
 
+## Extract a list of location values
 
 ```{r}
 deb_files <- list.files(path = "enter", pattern = "res_deb", 
                         recursive = TRUE, 
                         full.names = TRUE) %>%
-  str_subset("stunicode", negate = TRUE)
+  str_subset("stunicode", negate = TRUE) 
 
-# A function to select only fields which names or label includes string sequence
-dta_select_matches <- function(deb_file_path, retain_matches) {
-  data <- read_dta(deb_file_path)
-  retain_pattern <- paste(retain_matches, collapse = "|")
-  var_labels <- var_label(data)
-  selected_vars <- names(data)[str_detect(names(data),
-                                          retain_pattern) | 
-                                 str_detect(var_labels,
-                                            retain_pattern)]
-  selected_data <- data %>%
-    select(all_of(selected_vars))
-  return(selected_data)
+location_variables <- list(
+  year = "data collection year",
+  j0 = "observatory code",
+  obs = "observatory",
+  j41 = "municipality code",
+  j42 = "municipality name",
+  j4_code = "village code",
+  j4 = "village name",
+  code_site = "site code")
+
+location_values <- deb_files %>%
+  map(~ read_dta(.x) %>%
+        mutate(across(where(is.labelled), ~ as.character(as_factor(.))))) %>%
+  map(~ select(.x, any_of(names(location_variables)))) %>%
+  map(~ .x %>% mutate_all(as.character)) %>%
+  map(unique) %>%
+  bind_rows() %>%
+  rename(obs_code = j0, muni_code = j41, muni = j42, hamlet_code = j4_code,
+         hamlet = j4, site_code = code_site)
+```
+
+
+# Compare to official lists of localities
+
+
+```{r}
+
+
+# Harmonize names
+
+location_values2 <- location_values %>%
+  mutate(across(where(is.character), ~ str_to_upper(.))) %>%
+  mutate(across(where(is.character), ~str_replace_all(., "/", " "))) %>%
+  mutate(across(where(is.character), ~str_remove_all(., " CENTRE")))
+
+# Check municipality names
+munis_ror_names <- location_values2 %>%
+  select(muni) %>%
+  unique() %>%
+  pluck("muni")
+
+
+munis_gadm <- gadm("MDG", level  = 4, path = "data") %>%
+  st_as_sf()
+
+munis_gadm_names <- munis_gadm %>%
+  st_drop_geometry() %>%
+  select(muni = NAME_4) %>%
+  mutate(muni = str_to_upper(muni)) %>%
+  pluck("muni")
+
+
+# We do this operation only once as it is very long to process
+if (!file.exists("data/distance_matrix_munis.rds")) {
+  # Compute Levenshtein distance to find closest match in GADM
+  distance_matrix <- stringdistmatrix(munis_ror, munis_gadm, method = "lv")
+  write_rds(distance_matrix, "data/distance_matrix_munis.rds")
 }
 
-location_variables <- c("year", # data collection year
-                        "j0", # observatory code
-                        "obs", # observatorie
-                        "j41", # municipality code
-                        "j42", # municipality name
-                        "j4_code", # village code
-                        "j4", # village name
-                        "code_site") # code site
 
-location_values <- deb_files %>%
-  map(read_dta) %>%
-  map(~ select(.x, any_of(location_variables))) %>%
-  map(unique) %>%
-  bind_rows()
-  
+closest_matches <- apply(distance_matrix, 1, which.min)
+proximity_grades <- apply(distance_matrix, 1, min)
 
-location_values <- deb_files %>%
-  map(dta_select_matches, location_variables) %>%
-  map(to_factor) %>%
-  map(unique)
+muni_names_matches <- tibble(munis_ror = munis_ror,
+                             closest_gadm_name = munis_gadm[closest_matches],
+                             proximity_grade = proximity_grades)
 
 
-location_values <- deb_files %>%
-  map(read_dta) %>%
-  map(select(any_of, location_variables)) 
+munis_both <- munis_ror_names %>%
+  left_join(munis_gadm_names)
 
 
+munis_gadm <- read_rds("data/gadm/gadm41_MDG_3_pk.rds") %>%
+  st_to_sf()
+locs_gadm <- gadm("MDG", level  = 4, path = "data")
 
 
-my_debs <- deb_files %>%
-  map(read_dta) %>%
-  select(all_of)
-
-my_labels <- my_debs %>%
-  map(var_label)
-
-
-
-deb_select <- var_label(deb_data)  %>%
-  str_detect("campagne|village") 
-
-deb_selected <- deb_data %>%
-  select(all_of(deb_select))
-
-test1_data <- str_detect(test1_names, "campagne|village")
-
-
+# Match to existing municipalities
 ```
+
 
