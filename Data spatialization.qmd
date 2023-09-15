@@ -77,16 +77,18 @@ munis_gadm_names <- munis_gadm %>%
 # We do this operation only once as it is very long to process
 if (!file.exists("data/distance_matrix_munis.rds")) {
   # Compute Levenshtein distance to find closest match in GADM
-  distance_matrix <- stringdistmatrix(munis_ror, munis_gadm, method = "lv")
+  distance_matrix <- stringdistmatrix(munis_ror_names, munis_gadm_names, 
+                                      method = "lv")
   write_rds(distance_matrix, "data/distance_matrix_munis.rds")
 }
 
 
-closest_matches <- apply(distance_matrix, 1, which.min)
-proximity_grades <- apply(distance_matrix, 1, min)
-
-muni_names_matches <- tibble(munis_ror = munis_ror,
-                             closest_gadm_name = munis_gadm[closest_matches],
+closest_matches <- apply(distance_matrix, 1, which.min) %>%
+  as.integer()
+proximity_grades <- apply(distance_matrix, 1, min) %>%
+  as.numeric()
+muni_names_matches <- tibble(munis_ror = munis_ror_names,
+                             closest_gadm_name = munis_gadm_names[closest_matches],
                              proximity_grade = proximity_grades)
 
 
