@@ -8,7 +8,7 @@ REPO_URL=https://${GIT_PERSONAL_ACCESS_TOKEN}@github.com/fBedecarrats/ROR.git
 git clone $REPO_URL $WORK_DIR
 
 # copy heavy data sources
-mc cp -r s3/fbedecarrats/ROR $WORK_DIR
+mc cp -r s3/fbedecarrats/ROR/enter $WORK_DIR
 
 
 # Grant permission for the created folders/files

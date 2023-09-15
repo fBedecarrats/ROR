@@ -16,7 +16,6 @@ library(sf)
 library(stringdist)
 ```
 
-
 ## Extract a list of location values
 
 ```{r}
@@ -46,9 +45,7 @@ location_values <- deb_files %>%
          hamlet = j4, site_code = code_site)
 ```
 
-
 # Compare to official lists of localities
-
 
 ```{r}
 
@@ -104,5 +101,3 @@ locs_gadm <- gadm("MDG", level  = 4, path = "data")
 
 # Match to existing municipalities
 ```
-
-
