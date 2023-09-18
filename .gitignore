@@ -6,3 +6,6 @@ merge/*
 *.Rproj
 .Rproj.user
 data/*
+*.xlsx
+localisation/*
+Documentation*
