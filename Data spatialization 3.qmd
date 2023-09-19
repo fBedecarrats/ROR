@@ -39,7 +39,6 @@ deb_files <- list.files(path = "enter", pattern = "res_deb",
 
 # Define variables related to municipalty locations
 location_variables <- list(
-  year = "data collection year",
   j0 = "observatory code",
   obs = "observatory",
   j41 = "municipality code",
@@ -52,11 +51,12 @@ location_variables <- list(
 location_values <- deb_files %>%
   map(~ read_dta(.x) %>%
         mutate(across(where(is.labelled), ~ as.character(as_factor(.))))) %>%
-  map(~ select(.x, any_of(names(location_vars_muni)))) %>%
+  map(~ select(.x, any_of(names(location_variables)))) %>%
   map(~ .x %>% mutate_all(as.character)) %>%
   map(unique) %>%
   bind_rows() %>%
-  rename(obs_code = j0, muni_code = j41, muni_ror = j42) %>%
+  rename(obs_code = j0, muni_code = j41, muni_ror = j42, hamlet_code = j4_code,
+         hamlet = j4, site_code = code_site) %>%
   mutate(muni = str_to_upper(muni_ror),
          muni = str_replace_all(muni, "/", " "),
          muni = str_remove_all(muni, " CENTRE")) %>%
@@ -94,8 +94,11 @@ proximity_grades_rel <- proximity_grades_abs / str_length(location_values$muni) 
 
 # Bind the municipality names, their closest matches, and the proximity grades into a tibble
 muni_matches <- tibble(
+  obs_code = location_values$obs_code,
   muni_ror = location_values$muni_ror,
   muni = location_values$muni,
+  hamlet_code = location_values$hamlet_code,
+  hamlet = location_values$hamlet,
   closest_gadm_name = munis_gadm$muni[closest_matches],
   closest_gadm_district = munis_gadm$NAME_3[closest_matches],
   closest_gadm_region = munis_gadm$NAME_2[closest_matches],
@@ -106,24 +109,12 @@ muni_matches <- tibble(
 # Export the dataset for manual review
 writexl::write_xlsx(muni_matches, "review_muni_matches.xlsx")
 
-# Extract location-related data from the survey files and preprocess
-# location_values_all <- deb_files %>%
-#   map(~ read_dta(.x) %>%
-#         mutate(across(where(is.labelled), ~ as.character(as_factor(.))))) %>%
-#   map(~ select(.x, any_of(names(location_variables)))) %>%
-#   map(~ .x %>% mutate_all(as.character)) %>%
-#   map(unique) %>%
-#   bind_rows() %>%
-#   rename(obs_code = j0, muni_code = j41, muni_ror = j42) %>%
-#   mutate(muni = str_to_upper(muni_ror),
-#          muni = str_replace_all(muni, "/", " "),
-#          muni = str_remove_all(muni, " CENTRE")) %>%
-#   unique()
 ```
 
 We computed the Levenshtein distance between each municipality name from the survey data and the GADM data. Based on this distance, we identify the closest match from the GADM dataset for each survey municipality name. The proximity grade is calculated to guide potential manual review.
 
 
+We check observatory by observatory to identify similar names of naming patterns.
 
 
 To disambiguate some location names, we also use the Populated places database from the OCHA (https://data.humdata.org/fr/dataset/madagascar-settlements)
