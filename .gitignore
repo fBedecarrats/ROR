@@ -7,5 +7,4 @@ merge/*
 .Rproj.user
 data/*
 *.xlsx
-localisation/*
 Documentation*

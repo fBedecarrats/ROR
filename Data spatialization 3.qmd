@@ -37,113 +37,88 @@ deb_files <- list.files(path = "enter", pattern = "res_deb",
                         full.names = TRUE) %>%
   str_subset("stunicode", negate = TRUE) 
 
-# Define variables related to locations
-location_variables <- list(
-  year = "data collection year",
+# Define variables related to municipalty locations 
+location_vars_muni <- list(
+#  year = "data collection year",
   j0 = "observatory code",
   obs = "observatory",
   j41 = "municipality code",
   j42 = "municipality name",
-  j4_code = "village code",
-  j4 = "village name",
+#  j4_code = "village code",
+#  j4 = "village name",
   code_site = "site code")
 
 # Extract location-related data from the survey files and preprocess
 location_values <- deb_files %>%
   map(~ read_dta(.x) %>%
         mutate(across(where(is.labelled), ~ as.character(as_factor(.))))) %>%
-  map(~ select(.x, any_of(names(location_variables)))) %>%
+  map(~ select(.x, any_of(names(location_vars_muni)))) %>%
   map(~ .x %>% mutate_all(as.character)) %>%
   map(unique) %>%
   bind_rows() %>%
-  rename(obs_code = j0, muni_code = j41, muni = j42, hamlet_code = j4_code,
-         hamlet = j4, site_code = code_site)
+  rename(obs_code = j0, muni_code = j41, muni_ror = j42, hamlet_code = j4_code,
+         hamlet = j4, site_code = code_site) %>%
+  mutate(muni = str_to_upper(muni_ror),
+         muni_ror = str_replace_all(muni, "/", " "),
+         muni_ror = str_remove_all(muni, " CENTRE")) %>%
+  unique()
 ```
 
-# Compare to official lists of localities
+
+As a resukts we have a list of all variation of location variables found in the data. We have a total of `r `nrow(location_values)` different commune and vilage names.
+
+### Processing GADM Data
+
+The GADM (Global Administrative Areas) database provides up-to-date administrative boundaries and names for all countries globally. Here, we extract the municipal names for Madagascar. These serve as our reference set in the subsequent matching process.
 
 ```{r}
-
-# Harmonize names
-location_values2 <- location_values %>%
-  mutate(across(where(is.character), ~ str_to_upper(.))) %>%
-  mutate(across(where(is.character), ~str_replace_all(., "/", " "))) %>%
-  mutate(across(where(is.character), ~str_remove_all(., " CENTRE")))
-
-# Check municipality names
-munis_ror_names <- location_values2 %>%
-  select(muni) %>%
-  unique() %>%
-  pluck("muni")
-
-
 munis_gadm <- gadm("MDG", level  = 4, path = "data") %>%
-  st_as_sf()
-
-munis_gadm_names <- munis_gadm %>%
-  st_drop_geometry() %>%
-  select(muni = NAME_4) %>%
-  mutate(muni = str_to_upper(muni)) %>%
-  pluck("muni")
-
-
-
-# Compute Levenshtein distance to find closest match in GADM
-distance_matrix <- stringdistmatrix(munis_ror_names, munis_gadm_names, 
-                                    method = "lv")
-# write_rds(distance_matrix, "data/distance_matrix_munis.rds")
-
-
-closest_matches <- apply(distance_matrix, 1, which.min) %>%
-  as.integer()
-proximity_grades <- apply(distance_matrix, 1, min) %>%
-  as.numeric()
-muni_names_matches <- tibble(munis_ror = munis_ror_names,
-                             closest_gadm_name = munis_gadm_names[closest_matches],
-                             proximity_grade = proximity_grades)
-
- #writexl::write_xlsx(muni_names_matches, "muni_names_matches.xlsx")
-# Match to existing municipalities
+  st_as_sf() %>%
+  mutate(muni = str_to_upper(NAME_4))
 ```
+
+
+### Fuzzy Matching Process
+
+Given that different datasets might have slight variations in naming conventions or typographical differences, a simple direct match can often overlook correct pairings. By employing a fuzzy string matching method, we can capture these near-matches more effectively. Here, we compute a distance matrix to identify the closest possible matches between our two sets of municipality names.
+
+```{r fuzzy_matching}
+# Compute the distance matrix between municipality names in the survey data and GADM data
+distance_matrix <- stringdistmatrix(location_values$muni, munis_gadm$muni, 
+                                    method = "lv")
+
+# Identify closest matches based on the distance matrix
+closest_matches <- apply(distance_matrix, 1, which.min) %>%
+  as.numeric()
+proximity_grades_abs <- apply(distance_matrix, 1, min)
+proximity_grades_rel <- proximity_grades_abs / str_length(location_values$muni) * 100
+
+# Bind the municipality names, their closest matches, and the proximity grades into a tibble
+muni_matches <- tibble(
+  muni_ror = location_values$muni_ror,
+  muni = location_values$muni_ror,
+  closest_gadm_name = munis_gadm$muni[closest_matches],
+  closest_gadm_district = munis_gadm$NAME_3[closest_matches],
+  closest_gadm_region = munis_gadm$NAME_2[closest_matches],
+  proximity_grade_abs = proximity_grades_abs,
+  proximity_grade_rel = proximity_grades_rel) %>%
+  arrange(desc(proximity_grade_rel)) # Order by relative distance
+
+# Export the dataset for manual review
+writexl::write_xlsx(muni_matches, "review_muni_matches.xlsx")
+```
+
+We computed the Levenshtein distance between each municipality name from the survey data and the GADM data. Based on this distance, we identify the closest match from the GADM dataset for each survey municipality name. The proximity grade is calculated to guide potential manual review.
+
+
+
+
+
 
 
 Attempt on 2007
 ```{r}
-# Prepare data for 2007
-loc_2007 <- location_values %>%
-  filter(year == 2007) %>%
-  mutate(muni_ror = str_to_upper(muni)) %>%
-  mutate(muni_ror = str_replace_all(muni_ror, "/", " ")) %>%
-  mutate(muni_ror = str_remove_all(muni_ror, " CENTRE"))
 
-# Check municipality names
-munis_ror2007_names <- loc_2007 %>%
-  select(muni_ror) %>%
-  unique() %>%
-  pluck("muni_ror")
-
-munis_gadm <- gadm("MDG", level  = 4, path = "data") %>%
-  st_as_sf() %>%
-  mutate(muni = str_to_upper(NAME_4))
-
-munis_gadm_names <- munis_gadm %>%
-  pluck("muni")
-
-distance_matrix <- stringdistmatrix(munis_ror2007_names, munis_gadm_names, 
-                                    method = "lv")
-closest_matches <- apply(distance_matrix, 1, which.min) %>%
-  as.integer()
-proximity_grades <- apply(distance_matrix, 1, min) %>%
-  as.numeric()
-
-muni_names_matches_2007 <- tibble(
-  muni_ror = munis_ror2007_names,
-  closest_gadm_name = munis_gadm_names[closest_matches],
-  proximity_grade = proximity_grades) %>%
-  mutate(verif = "")
-# Some matches proposed by this technique are obviously wrong (11/109)
-# We corrected them manually
-# writexl::write_xlsx(muni_names_matches_2007, "muni_names_matches_2007.xlsx")
 manual_matches <- tibble::tribble(
                      ~muni_ror,     ~manual_match,              ~source_match,
           "FERAMANGA-AVARATRA",     "AMBANDRIKA",      "OCHA located places",
