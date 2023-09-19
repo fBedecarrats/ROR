@@ -100,6 +100,7 @@ muni_matches <- tibble(
   hamlet_code = location_values$hamlet_code,
   hamlet = location_values$hamlet,
   closest_gadm_name = munis_gadm$muni[closest_matches],
+  closest_gadm_gid = munis_gadm$GID_4[closest_matches],
   closest_gadm_district = munis_gadm$NAME_3[closest_matches],
   closest_gadm_region = munis_gadm$NAME_2[closest_matches],
   proximity_grade_abs = proximity_grades_abs,
@@ -115,58 +116,80 @@ We computed the Levenshtein distance between each municipality name from the sur
 
 
 We check observatory by observatory to identify similar names of naming patterns.
-
-
 To disambiguate some location names, we also use the Populated places database from the OCHA (https://data.humdata.org/fr/dataset/madagascar-settlements)
 
 
+### Re-incorporate the corrected matches
 
-
-Attempt on 2007
 ```{r}
-
-manual_matches <- tibble::tribble(
-                     ~muni_ror,     ~manual_match,              ~source_match,
-          "FERAMANGA-AVARATRA",     "AMBANDRIKA",      "OCHA located places",
-          "FERAMANGA AVARATRA",     "AMBANDRIKA",      "OCHA located places",
-                   "AMBODIADY",   "AMBODIFARIHY",                   "Visual",
-                 "ANDROKAVATO",         "AMBANO", "agritrop.cirad.fr/558679",
-"VOHITROMBY VOHITROMBY CENTRE",     "VOHITROMBY",                   "Visual",
-   "AMBATOHARANANA MAHANTSARA", "AMBATOHARANANA",                   "Visual",
- "AMBATOHARANANA AMBODIBARIKA", "AMBATOHARANANA",                   "Visual",
-                    "BEZEZIKA",     "ANKILIVALO",      "OCHA located places",
-                    "BEKININY",         "BEFASY",      "OCHA located places",
-                "FORT DAUPHIN",       "TOLANARO",                "Wikipedia",
-              "TSIVORY CENTRE",        "TSIVORY",                   "Visual")
-
-# We use the automatic match or manual one when we created one
-muni_names_matches_2007 <- muni_names_matches_2007 %>%
-  left_join(select(manual_matches, muni_ror, manual_match),
-            by = join_by("muni_ror")) %>%
-  mutate(gadm_match = ifelse(is.na(manual_match), 
-                             closest_gadm_name, manual_match)) %>%
-  select(muni_ror, gadm_match) %>%
-  left_join()
-
-# Get the original names back into loc_2007
-loc_2007_2 <- muni_names_matches_2007 %>%
-  left_join(munis_gadm %>%
-              st_drop_geometry() %>%
-              select(gadm_match = muni, name_gadm = NAME_4),
-            by = join_by("gadm_match")) 
+# Reading the corrected file
+corrected_matches <- readxl::read_xlsx("review_muni_matches_correct.xlsx")
 
 
-munis_gadm %>%
-  st_drop_geometry() %>%
-  group_by(NAME_1, NAME_4) %>%
-  summarize(count = n()) %>%
-  filter(count > 1)
+# 3. Integrating Corrections
+muni_matches_updated <- corrected_matches %>%
+  mutate(
+    closest_gadm_name = ifelse(!is.na(NAME_4_correct), NAME_4_correct, 
+                               closest_gadm_name),
+    closest_gadm_gid = ifelse(!is.na(GID_4_correct), GID_4_correct, 
+                              closest_gadm_gid)) %>%
+  select(-NAME_4_correct, -GID_4_correct, -Source_correct, -proximity_grade_abs,
+         -proximity_grade_rel) # dropping unnecessary columns
 
+# Define variables related to municipalty locations
+loc_vars_w_years <- list(
+  year = "data collection year",
+  j0 = "observatory code",
+  obs = "observatory",
+  j41 = "municipality code",
+  j42 = "municipality name",
+  j4_code = "village code",
+  j4 = "village name",
+  code_site = "site code")
 
+# Recreate a similar dataset, with one observation per year
+location_values_all <- deb_files %>%
+  map(~ read_dta(.x) %>%
+        mutate(across(where(is.labelled), ~ as.character(as_factor(.))))) %>%
+  map(~ select(.x, any_of(names(loc_vars_w_years)))) %>%
+  map(~ .x %>% mutate_all(as.character)) %>%
+  bind_rows() %>%
+  rename(obs_code = j0, muni_ror = j42, hamlet_code = j4_code, hamlet = j4) %>%
+  group_by(year, obs_code, muni_ror, hamlet_code, hamlet) %>%
+  summarise(count = n()) %>%
+  ungroup() %>%
+  mutate(muni = str_to_upper(muni_ror),
+         muni = str_replace_all(muni, "/", " "),
+         muni = str_remove_all(muni, " CENTRE")) 
 
-# Andrakavato est un hameau de la commune d'Ambano
-# Source: https://agritrop.cirad.fr/558679/1/document_558679.pdf
+# Cleaning data to remove lines with empty values for municipalities
+location_values_clean <- location_values_all %>%
+  filter(!is.na(muni_ror) & muni_ror != "")
+# Merging with the GADM matches
+merged_data <- location_values_clean %>%
+  left_join(select(muni_matches_updated, -muni), 
+            by = c("obs_code", "muni_ror"))
+
 ```
+
+
+
+```{r}
+# Checking for duplicated rows in location_values_clean
+duplicated_rows_location_values_clean <- location_values_clean %>%
+  filter(duplicated(select(., obs_code, muni_ror, hamlet_code, hamlet)) | 
+           duplicated(select(., obs_code, muni_ror, hamlet_code, hamlet), fromLast = TRUE))
+
+# Checking for duplicated rows in muni_matches_updated
+duplicated_rows_muni_matches_updated <- muni_matches_updated %>%
+  filter(duplicated(select(., obs_code, muni_ror, muni_code, hamlet_code, hamlet, site_code)) |
+           duplicated(select(., obs_code, muni_ror, muni_code, hamlet_code, hamlet, site_code), fromLast = TRUE))
+
+```
+
+
+## Counting data per observatory
+
 
 
 ```{r}
