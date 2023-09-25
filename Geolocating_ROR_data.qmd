@@ -141,82 +141,11 @@ clean_string <- function(x){
 }
 ```
 
-### Fuzzy mathing
+### Fuzzy matching
 
 Fuzzy matching is a process that identifies non-exact matches of your query string/pattern. Unlike the traditional matching methods, which require an exact match, fuzzy matching captures the records that are likely to be relevant. It computes a similarity score between the strings being compared, allowing for minor discrepancies such as typos, added or missing characters, and more. This is especially useful in scenarios where data might come from various sources, with slight variations in spelling or naming conventions. A common metric for this is the "Levenshtein distance" which counts the number of edits needed to change one string into another.
 
 ```{r}
-fuzzy_match <- function(target_string, reference_vector, observatory_code, 
-                        max_distance = 0.25) {
-  # Filter the obs_communes based on observatory_code
-  filtered_reference <- obs_communes %>%
-    filter(OBS_CODE == observatory_code) %>%
-    select(clean_ADM3, ADM3_PCODE, ADM3_EN)
-  
-  # If filtered_reference is empty, return NA values
-  if (nrow(filtered_reference) == 0) {
-    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = 1))
-  }
-  
-  # Use stringdist to find the closest match
-  distances <- stringdist::stringdistmatrix(target_string, filtered_reference$clean_ADM3, method = "jw")
-  
-  min_distance <- min(distances, na.rm = TRUE) # Adding na.rm = TRUE
-  
-  # Check for Inf or NA distance and replace it with 1
-  if (is.infinite(min_distance) || is.na(min_distance)) {
-    min_distance <- 1
-  }
-  
-  # If min_distance exceeds the max_distance threshold, return NA values
-  if (min_distance > max_distance) {
-    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = NA))
-  }
-  
-  matched_row <- filtered_reference[which.min(distances), ]
-  
-  return(list(matched_string = matched_row$clean_ADM3, 
-              ADM3_PCODE = matched_row$ADM3_PCODE, 
-              ADM3_EN = matched_row$ADM3_EN, 
-              distance = min_distance))
-}
-
-
-fuzzy_match <- function(target_string, dataframe, column_name, observatory_code, 
-                        max_distance = 0.25) {
-  # Filter the dataframe based on observatory_code
-  filtered_reference <- dataframe %>%
-    filter(OBS_CODE == observatory_code) %>%
-    select(all_of(column_name), ADM3_PCODE, ADM3_EN)
-  
-  # If filtered_reference is empty, return NA values
-  if (nrow(filtered_reference) == 0) {
-    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = 1))
-  }
-  
-  # Use stringdist to find the closest match
-  distances <- stringdist::stringdistmatrix(target_string, filtered_reference[[column_name]], method = "jw")
-  
-  min_distance <- min(distances)
-  
-  # Check for Inf distance and replace it with 1
-  if (is.infinite(min_distance)) {
-    min_distance <- 1
-  }
-  
-  # If min_distance exceeds the max_distance threshold, return NA values
-  if (min_distance > max_distance) {
-    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = NA))
-  }
-  
-  matched_row <- filtered_reference[which.min(distances), ]
-  
-  return(list(matched_string = matched_row[[column_name]], 
-              ADM3_PCODE = matched_row$ADM3_PCODE, 
-              ADM3_EN = matched_row$ADM3_EN, 
-              distance = min_distance))
-}
-
 fuzzy_match <- function(target_string, dataframe, column_name, observatory_code, 
                         max_distance = 0.25) {
   # Filter the dataframe based on observatory_code
@@ -254,8 +183,7 @@ fuzzy_match <- function(target_string, dataframe, column_name, observatory_code,
   return(list(matched_string = matched_row[[column_name]], 
               ADM3_PCODE = matched_row$ADM3_PCODE, 
               ADM3_EN = matched_row$ADM3_EN, 
-              distance = min_distance)) %>%
-  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
+              distance = min_distance))
 }
 ```
 
@@ -264,7 +192,9 @@ fuzzy_match <- function(target_string, dataframe, column_name, observatory_code,
 
 The process followed depends on the completeness/quality of the data obtained in the previous steps, so we follow it by 
 
-1. Where we have municipality names in the corresponding field: match these names with the names of the municipalities  already identified as data collection sites (the matching is segmented observatory by observatory to reduce the risk). There might be some writing variations so we use fuzzy matching, checking for the likelihood to have a valid match (and maybe enable a visual confirmation)
+### Method 1
+
+Where we have municipality names in the corresponding field: match these names with the names of the municipalities  already identified as data collection sites (the matching is segmented observatory by observatory to reduce the risk). There might be some writing variations so we use fuzzy matching, checking for the likelihood to have a valid match (and maybe enable a visual confirmation)
 
 
 ```{r}
@@ -303,14 +233,11 @@ unique_combinations <- unique_combinations %>%
   filter(j0 %in% identified_observatories) 
 
 # Apply the fuzzy matching observatory-wise
-results <- map2_df(unique_combinations$clean_muni, unique_combinations$j0, 
-                   ~ as.data.frame(t(fuzzy_match(.x, obs_communes$clean_ADM3, .y)))
-                   )
-
-results2 <- map2_df(unique_combinations$clean_muni, 
+results <- map2_df(unique_combinations$clean_muni, 
                    unique_combinations$j0, 
                    ~ as.data.frame(t(
-                     fuzzy_match(.x, obs_communes, "clean_ADM3", .y))))
+                     fuzzy_match(.x, obs_communes, "clean_ADM3", .y))))  %>%
+  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
 
 # Combine the results with the unique_combinations
 correspondence_table <- bind_cols(unique_combinations, results) 
@@ -364,7 +291,7 @@ unmatched_results <- correspondence_table %>%
 results_step2 <- map2_df(unmatched_results$first_word, 
                          unmatched_results$j0, 
                          ~ as.data.frame(t(
-                           fuzzy_match(.x, obs_communes$clean_ADM3, .y)))) %>%
+                           fuzzy_match(.x, obs_communes, "clean_ADM3", .y))))  %>%
   unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
 
 # Update Results
@@ -398,114 +325,241 @@ correspondence_table %>%
 
 We still have a quarter of the localities unmatched.
 
-## Method 3
+### Method 3
 
 Now let's see if I have clo
 
 ```{r}
-# 1. Re-filter unmatched results
-unmatched_results_v2 <- correspondence_table %>%
+# Re-filter unmatched results
+unmatched_results2 <- correspondence_table %>%
   filter(is.na(matched_string)) %>%
   select(j0:clean_village)
 
-# 2. Perform the fuzzy matching
-results_step3 <- map2_df(unmatched_results_v2$clean_village, unmatched_results_v2$j0, 
-                         ~ {
-                           # Get the list of identified municipalities for this observatory
-                           identified_municipalities <- obs_communes %>%
-                             filter(OBS_CODE == .y) %>%
-                             pull(clean_ADM3)
-                           
-                           # Filter the pop_places to only those identified municipalities
-                           relevant_pop_places <- pop_places %>%
-                             filter(clean_pname %in% identified_municipalities)
-                           
-                           # Now perform the fuzzy matching
-                           as.data.frame(t(
-                             fuzzy_match(.x, relevant_pop_places$clean_pname, .y)
-                           ))
-                         })
+# Join OBS_CODE to pop_places
+pop_places <- pop_places %>%
+  rename(ADM3_PCODE = COM_PCODE, ADM3_EN = COMMUNE) %>%
+  mutate(ADM3_PCODE = str_replace(ADM3_PCODE, "^MDG", "MG")) %>%
+  left_join(select(obs_communes, ADM3_PCODE, OBS_CODE) %>%
+                     st_drop_geometry(), 
+            by = "ADM3_PCODE")
+
+# Apply the fuzzy matching observatory-wise
+results_step3 <- map2_df(unmatched_results2$clean_village, 
+                         unmatched_results2$j0, 
+                         ~ as.data.frame(t(
+                           fuzzy_match(.x, pop_places, "clean_pname", .y,
+                                       max_distance = 0.22))))  %>% # erratic results beyond
+  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
+
+# Bind the results with unmatched_results_v2
+potential_matches3 <- bind_cols(unmatched_results2, results_step3)
+
+# Manually identify false positives and remove them
+false_positives2 <- c("analambarika", "maroaloka", "ambakela", "ambodirofia",
+                      "ambohibao", "ambato mangabe", "marofonaritra", 
+                      "andranovo ambodimanga", "morataitra", "antanambao", 
+                      "ankililoa")
+validated_matches3 <- potential_matches3 %>%
+  mutate(across(c(matched_string, ADM3_PCODE, ADM3_EN, distance),
+               ~ ifelse(clean_village %in% false_positives2, NA, .)),
+         method = ifelse(!is.na(matched_string), "method_3", NA_character_))
+
+correspondence_table <- correspondence_table %>%
+  filter(!is.na(matched_string)) %>%
+  bind_rows(validated_matches3)
+```
+
+Let's check how much we have now:
+
+```{r}
+correspondence_table %>%
+  group_by(matching_method = method) %>% 
+  summarise(N = n()) %>%
+  mutate(Percentage = (N / sum(N) * 100),
+         Percentage = round(Percentage, 1)) %>%
+  gt()
+```
+
+We still have 14% of the localities unmatched.
+
+### Method 4
+
+For the remaining, let's try matching with other village names for which municipality has been matched.
+
+```{r}
+# Create a list of municipality names and village names for matched observations
+matched_villages <- correspondence_table %>%
+  filter(!is.na(method)) %>%
+  select(j0, ADM3_PCODE, ADM3_EN, clean_village) %>%
+  distinct() %>%
+  rename(OBS_CODE = j0)
+
+# Re-filter unmatched results
+unmatched_results3 <- correspondence_table %>%
+  filter(is.na(method)) %>%
+  select(j0:clean_village)
+
+# Try matching unmatched villages against matched village names observatory-wise
+results_village_match <- map2_df(
+  unmatched_results3$clean_village, unmatched_results3$j0,
+  ~ as.data.frame(t(fuzzy_match(.x, matched_villages, "clean_village",
+                                .y, max_distance = 0.28)))) %>%
+  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
+# Bind these results with unmatched_results_v3
+potential_matches4 <- bind_cols(unmatched_results3, results_village_match)
+
+# Manually identify false positives and remove them
+false_positives4 <- c("amp0mbibitika antanakova", "arakoke ambonano ampihamibe", 
+                      "farara farara", "farara ambakela", "fara ambakela", 
+                      "ambatotelo marofinaritra")
+validated_matches4 <- potential_matches4 %>%
+  mutate(across(c(matched_string, ADM3_PCODE, ADM3_EN, distance),
+               ~ ifelse(clean_village %in% false_positives4, NA, .)),
+         method = ifelse(!is.na(matched_string), "method_4", NA_character_))
 
 
-fuzzy_match <- function(target_string, reference_vector, observatory_code, 
-                        max_distance = 0.25) {
-  # Filter the obs_communes based on observatory_code
-  filtered_reference <- obs_communes %>%
-    filter(OBS_CODE == observatory_code) %>%
-    select(clean_ADM3, ADM3_PCODE, ADM3_EN)
+# Merge the updated results back to the correspondence table
+correspondence_table <- correspondence_table %>%
+  filter(!is.na(matched_string)) %>%
+  bind_rows(validated_matches4)
+```
+
+Let's check how much we have now:
+
+```{r}
+correspondence_table %>%
+  group_by(matching_method = method) %>% 
+  summarise(N = n()) %>%
+  mutate(Percentage = (N / sum(N) * 100),
+         Percentage = round(Percentage, 1)) %>%
+  gt()
+```
+
+We're good!
+
+## Matching villages
+
+Now we will georeference the villages.
+
+```{r}
+fuzzy_match_village <- function(target_string, dataframe, column_name, ADM3_PCODE_filter, 
+                                max_distance = 0.25) {
+  
+  filtered_reference <- dataframe %>%
+                          filter(ADM3_PCODE == ADM3_PCODE_filter) %>%
+                          select(all_of(column_name), P_PCODE, longitude, latitude)
   
   # If filtered_reference is empty, return NA values
   if (nrow(filtered_reference) == 0) {
-    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = 1))
+    return(list(matched_string = NA, P_PCODE = NA, geometry = NA, distance = 1))
   }
   
   # Use stringdist to find the closest match
-  distances <- stringdist::stringdistmatrix(target_string, filtered_reference$clean_ADM3, method = "jw")
+  distances <- stringdist::stringdistmatrix(target_string, filtered_reference[[column_name]], method = "jw")
   
-  min_distance <- min(distances, na.rm = TRUE) # Adding na.rm = TRUE
+  # If there are no valid distances, set min_distance to Inf
+  if(all(is.na(distances))) {
+    min_distance <- Inf
+  } else {
+    min_distance <- min(distances, na.rm = TRUE)
+  }
   
-  # Check for Inf or NA distance and replace it with 1
-  if (is.infinite(min_distance) || is.na(min_distance)) {
+  # Check for Inf distance and replace it with 1
+  if (is.infinite(min_distance)) {
     min_distance <- 1
   }
   
   # If min_distance exceeds the max_distance threshold, return NA values
   if (min_distance > max_distance) {
-    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = NA))
+    return(list(matched_string = NA, P_PCODE = NA, geometry = NA, distance = NA))
   }
   
   matched_row <- filtered_reference[which.min(distances), ]
   
-  return(list(matched_string = matched_row$clean_ADM3, 
-              ADM3_PCODE = matched_row$ADM3_PCODE, 
-              ADM3_EN = matched_row$ADM3_EN, 
-              distance = min_distance))
+  return(list(matched_string2 = matched_row[[column_name]], 
+              P_PCODE = matched_row$P_PCODE, 
+              longitude = matched_row$longitude,
+              latitude = matched_row$latitude,
+              distance2 = min_distance))
 }
 
+# Extract coordinates from pop_places
+coords <- data.frame(st_coordinates(pop_places$geometry))
 
-# Update unmatched results with step 3 results
-unmatched_results_v2 <- bind_cols(unmatched_results_v2, results_step3) %>%
-  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
+# Add these as columns in pop_places
+pop_places$longitude <- coords[, "X"]
+pop_places$latitude <- coords[, "Y"]
+
+
+
+# Apply the modified fuzzy match
+results_village_geom <- pmap_df(
+  list(clean_village = correspondence_table$clean_village, 
+       ADM3_PCODE = correspondence_table$ADM3_PCODE), 
+  function(clean_village, ADM3_PCODE) {
+    as.data.frame(t(fuzzy_match_village(clean_village, pop_places, "clean_pname", ADM3_PCODE)))
+  }
+)
+
+# Combine the results with correspondence_table
+correspondence_table_updated <- bind_cols(correspondence_table, results_village_geom)
+
 ```
 
 
-
-Where I have municipality names in the corresponding field, but no match was found : look for other possible match in the surrounding municipality (take the center of the group of identified municipalities and consider all municipalities in a given radius -- 100km would be a safe bet). Here too, the matching is implemented observatory by observatory.
+Visualizing the data
 
 ```{r}
-# Calculate centroids
-obs_centroids <- obs_communes %>%
-  filter(!is.na(OBS_CODE)) %>%
-  group_by(OBS_CODE) %>%
-  summarize(geom = st_centroid(st_union(geom)))
+# Extract matched results
+matched_results <- unique(correspondence_table$ADM3_PCODE) %>%
+  na.omit()
 
+# Keep municipalities in those
+matched_spatial <- obs_communes %>%
+  filter(ADM3_PCODE %in% matched_results)
 
-# Identify nearby municipalities
-nearby_municipalities <- st_join(obs_centroids, obs_communes, 
-                                 join = st_is_within_distance, dist = 100000) 
+#############################################################################
+# Big problem with spatial coordianates TO SOLVE LATER
+# Handle NULL values by assigning them NA
+correspondence_table_updated$longitude[sapply(correspondence_table_updated$longitude, is.null)] <- NA
+correspondence_table_updated$latitude[sapply(correspondence_table_updated$latitude, is.null)] <- NA
 
-# 4. Fuzzy matching within the radius
-results_step3 <- map2_df(unmatched_results$first_word, unmatched_results$j0, 
-                         ~ as.data.frame(t(
-                           fuzzy_match(.x, nearby_municipalities$clean_ADM3, .y)
-                           ))) %>%
-  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
-# 5. Update Results
-potential_matches <- bind_cols(unmatched_results, results_step2) 
+# Convert the remaining list items to numeric
+correspondence_table_updated$longitude <- sapply(correspondence_table_updated$longitude, function(x) {
+  if (is.list(x) && !is.null(x[[1]])) {
+    return(as.numeric(x[[1]]))
+  } else {
+    return(as.numeric(x))
+  }
+})
+
+correspondence_table_updated$latitude <- sapply(correspondence_table_updated$latitude, function(x) {
+  if (is.list(x) && !is.null(x[[1]])) {
+    return(as.numeric(x[[1]]))
+  } else {
+    return(as.numeric(x))
+  }
+})
+# Filter rows where both longitude and latitude are not NA
+correspondence_table_updated <- correspondence_table_updated[!is.na(correspondence_table_updated$longitude) & 
+                                                            !is.na(correspondence_table_updated$latitude), ]
+# Convert to sf object
+correspondence_sf <- st_as_sf(correspondence_table_updated, coords = c("longitude", "latitude"), crs = 4326)
+#########################################################################
+
+Vahatra <- st_read("../Aires protégées/Vahatra/Shapefiles/AP_Vahatra.shp")
+
+# Plot
+tmap_mode("view")
+tm_shape(matched_spatial) +
+  tm_polygons(col = "OBS_NAME") +
+  tm_shape(correspondence_sf) + 
+  tm_dots(alpha = 0.5, size = 0.1) +
+  tm_shape(Vahatra) +
+  tm_polygons(col = "green", alpha = 0.3) +
+  tmap_options(check.and.fix = TRUE)
+
 ```
-
-This method gives no results for these R observatory
-
-3. For all the observations where a match was found in step 1 and 2, work on the matching of the content of the village field. Here we take advantage that the commune PCODE correspond between the subnational dataset (registered as ADM3_PCODE) and the populated places dataset (registered as COM_PCODE) to restrict the fuzzy matching to the populated places of the corresponding municipality.
-
-
-5. For the observations that could not be matched in the two previous steps (either because matches did not  work, or because the municipality field was empty), match the values of their “village name” to the village name of observations that were successfully matched at step 3. Here we should assess the reliability of the match, and if the reliability is high, automatically fetch the municipality name of the match.
-
-
-6. For cases that could not be matched at step 6, use the field j5, which is the identification number of the household, to see if it has been surveyed in a previous or subsequent year and if its georeferencing  could be done at another year and, if so retrieve the corresponding information.
-7. For the remaining ones try identifying directly from the village name: first among the populated places of the identified municipalies, and second within a 30 km radius.
-
-
 
 
 Data Pre-processing and Addressing Discrepancies
