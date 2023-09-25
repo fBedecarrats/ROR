@@ -1,0 +1,522 @@
+---
+title: "Georeferencing Annual Household Surveys in Rural Madagascar: A Comprehensive Analysis of Observatories (1995-2014)"
+author: "Florent Bédécarrats"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+## Introduction
+Background of the Study
+Objective of the Georeferencing
+A notebook approach based on R and Quarto
+
+```{r}
+library(tidyverse)    # A series of packages for data manipulation
+library(haven)        # Required for reading STATA files (.dta)
+library(labelled)     # To work with labelled data from STATA
+library(sf)           # for spatial data handling
+library(tidyverse)    # for data wrangling and visualization
+library(stringdist)   # for string distance and matching
+library(tmap)         # for mapping
+library(fuzzyjoin)    # for fuzzy joining
+library(readxl)       # Read data frames to Excel format
+library(writexl)      # Write data frames to Excel format
+library(gt)
+```
+
+
+## Revisiting the Rural Observatories (ROR) of Madagascar
+Historical Background
+Significance in Rural Development and Policy Decisions
+
+### Challenges for opening the data
+In this notebook, our primary objective is to enhance the georeferencing of the ROR survey data for open data sharing. The initial ROR survey, initiated in 1995, recorded geographical information in varying formats: from "village" to a combination of "municipality", "village", and "site". A significant challenge arose from the fact that while data collection started in 1995, municipalities were only formally established in 1994, with several years required for stabilization. The inherent fluidity in toponyms, predominantly derived from oral traditions, resulted in varied written representations. Our endeavor is to identify, disambiguate, and georeference observations recorded in the ROR data, adopting the Common Operational Datasets (CODs) as a reference, which has been collaboratively defined by OCHA and Madagascar's BNGRC (National Disaster Management Office).
+
+CODs stand as the bedrock for all preparedness and response operations, especially within the humanitarian sector. Adopted by the IASC in 2008 and revised in 2010, these datasets are pivotal for facilitating informed decision-making during the critical initial hours of a crisis. By ensuring consistency among stakeholders, they simplify data management and establish a shared operational picture of a crisis. Particularly relevant for our purpose is the incorporation of P-codes in CODs. These unique geographic identification codes, found in both Administrative Boundary CODs (COD-ABs) and Population Statistics CODs (COD-PSs), surmount challenges posed by variations in placenames and spellings. For instance, in Madagascar, 81 different administrative level 4 (ADM4) features are labeled "Morafeno", with six of these existing within ADM3 features also termed "Morafeno", distinguishable solely by their unique ADM2 features.
+
+P-codes act as reliable geographic identifiers, eliminating errors arising from identical or variably spelled geographic locations. Leveraging the HDX platform, an open platform for cross-crisis data sharing, we fetch this data to ensure the accurate georeferencing of our ROR data. By harnessing the standardized and official spelling of places provided by P-codes, we can amalgamate, harmonize, and analyze data from diverse sources, offering a comprehensive, geo-accurate view of the survey's findings.
+
+## Data Description and Initial Exploration with R
+
+###  ROR survey data
+
+The ROR survey data is organized in a collection of year-specfic folders ranging from 1995 to 2015. Each yearly folder houses multiple .dta files (Stata data format) – about 85 per year – with diverse filenames such as "res_as.dta" and "res_bp.dta". Although there's an element of harmonization achieved, especially regarding certain variables and household identifiers, the data varies in terms of geographical granularity. Initial years primarily provide a singular field denoting the village name. As the years progress, this evolves to include a municipality name, and in the latter years, an additional "site" name occasionally appears. A comprehensive overview of the observations can be gleaned from the "res_deb.dta" files within each year.
+
+```{r}
+# Function to extract variable info for a given year and file
+extract_variable_info <- function(year, file) {
+  
+  file_path <- paste0("Données ROR/enter/", year, "/", file)
+  
+  if (!file.exists(file_path)) return(tibble())
+  
+  data <- read_dta(file_path, n_max = 0)
+  
+  tibble(
+    file_name = file,
+    variable_name = names(data),
+    variable_label = var_label(data) %>% as.character(),
+    year = year)
+}
+
+# Obtain all years from the directory structure
+years <- list.dirs("Données ROR/enter/", recursive = FALSE, full.names = FALSE)
+
+# Use the tidyverse approach to map over years and files
+all_vars <- map_df(years, ~{
+  files_for_year <- list.files(paste0("Données ROR/enter/", .x), pattern = "\\.dta$", full.names = FALSE)
+  map_df(files_for_year, extract_variable_info, year = .x)
+})
+
+# Convert any NULL values in variable_label to "NA"
+all_vars$variable_label[is.na(all_vars$variable_label)] <- "NA"
+
+# Consolidate the information using the tidyverse approach
+variable_dictionary <- all_vars %>%
+  group_by(file_name, variable_name) %>%
+  arrange(year) %>%  
+  summarise(
+    variable_label = first(variable_label[variable_label != "NA"] %||% "NA"),
+    years_present = list(unique(year))
+  ) %>%
+  ungroup() %>%
+  mutate(years_present = map_chr(years_present, ~paste(.x, collapse = ",")))
+
+# Write the variable dictionary to an Excel file
+write_xlsx(variable_dictionary, "ROR_Variable_Dictionary.xlsx")
+```
+
+
+The code block above creates a data dictionnary, which you can download by clicking  [on this link](ROR_Variable_Dictionary.xlsx).
+
+### Administrative boundaries
+
+The "Madagascar Subnational Administrative Boundaries" dataset is sourced from the Common Operational Datasets (CODs), which offer authoritative reference datasets vital for decision-making during humanitarian operations. Specifically designed to streamline the discovery and exchange of pivotal data, CODs ensure uniformity and use the 'best available' datasets. This particular dataset focuses on administrative boundaries, including gazetteers with P-codes, facilitating organized humanitarian assessments and data management. P-codes act as unique identifiers for every administrative unit and populated area, ensuring standardization in nomenclature. When datasets adhere to the P-code standard, their integration and analysis become efficient. The dataset provides comprehensive boundary information for Madagascar at five administrative levels: country, region, district, commune, and fokontany. It's accessible for download as shapefiles from [the provided link](https://data.humdata.org/dataset/cod-ab-mdg).
+
+### Localities
+
+The "Madagascar Populated Places" dataset is part of the Common Operational Datasets (CODs). This dataset encompasses populated place points for Madagascar. The data has been sourced from the National Geospatial-Intelligence Agency and provided by the University of Georgia - ITOS. Further, the Geographic Information Support Team (GIST) has taken up the role of distributor, with the data being published on 2007-03-07. UN OCHA ROSA has enhanced the dataset by adding P-codes and administrative boundary names, which are based on the BNGRC (National Disaster Management Office) data. The dataset geolocates 28184 populated places with their toponyms (names), codes related to various administrative levels such as fokontany, commune, district, and region, and their spatial coordinates.
+
+```{r}
+# Load datasets
+ROR_surveys_2007 <- read_dta("Données ROR/enter/2007/res_deb.dta")
+observatory_names <- read_xlsx("Observatory_names.xlsx")
+obs_communes <- st_read(
+  "data/observatoires/Observatoires_ROR_communes_COD.gpkg") %>%
+  left_join(select(observatory_names, name, code), 
+            by = c("OBS_NAME" = "name")) %>%
+  rename(OBS_CODE = code)
+pop_places <- st_read(
+  "../entités administratives/OCHA_BNGRC populated places/mdg_pplp_places_NGA_OCHA.shp")
+```
+
+
+## Methodology
+
+### Simplify strings
+
+The cases can be a problem, as well as the fact that some attibutes of the toponyms are used sometimes in Malagasy and Sometimes in French.
+
+```{r}
+# A function to harmonize cases and usual variation in the way localities are 
+# written in the survey data
+clean_string <- function(x){
+  x %>%
+    tolower() %>% # Convert to lowercase
+    # Retain spaces, remove other non-alphanumeric characters
+    str_replace_all("[^[:alnum:][:space:]]", " ") %>% 
+    str_remove_all("\\b(centre|haut|bas|androy)\\b") %>%
+    str_trim() %>% # Trim spaces from start and end of string
+    str_replace_all("\\bcentre\\b", "") %>% # Remove the word 'centre'
+    # Translate cardinal points
+    str_replace_all("\\bnord\\b", "avaratra") %>% 
+    str_replace_all("\\best\\b", "atsinanana") %>%
+    str_replace_all("\\bouest\\b", "andrefana") %>% 
+    str_replace_all("\\bsud\\b", "atsimo") %>% 
+    str_replace_all("\\batsinana\\b", "atsinanana") %>% # Replace short form 
+    str_replace_all("(fort dauphin)|(taolagnaro)|(tolagnaro)", 
+                    "tolanaro") # Variations for fort dauphin
+    
+}
+```
+
+### Fuzzy mathing
+
+Fuzzy matching is a process that identifies non-exact matches of your query string/pattern. Unlike the traditional matching methods, which require an exact match, fuzzy matching captures the records that are likely to be relevant. It computes a similarity score between the strings being compared, allowing for minor discrepancies such as typos, added or missing characters, and more. This is especially useful in scenarios where data might come from various sources, with slight variations in spelling or naming conventions. A common metric for this is the "Levenshtein distance" which counts the number of edits needed to change one string into another.
+
+```{r}
+fuzzy_match <- function(target_string, reference_vector, observatory_code, 
+                        max_distance = 0.25) {
+  # Filter the obs_communes based on observatory_code
+  filtered_reference <- obs_communes %>%
+    filter(OBS_CODE == observatory_code) %>%
+    select(clean_ADM3, ADM3_PCODE, ADM3_EN)
+  
+  # If filtered_reference is empty, return NA values
+  if (nrow(filtered_reference) == 0) {
+    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = 1))
+  }
+  
+  # Use stringdist to find the closest match
+  distances <- stringdist::stringdistmatrix(target_string, filtered_reference$clean_ADM3, method = "jw")
+  
+  min_distance <- min(distances, na.rm = TRUE) # Adding na.rm = TRUE
+  
+  # Check for Inf or NA distance and replace it with 1
+  if (is.infinite(min_distance) || is.na(min_distance)) {
+    min_distance <- 1
+  }
+  
+  # If min_distance exceeds the max_distance threshold, return NA values
+  if (min_distance > max_distance) {
+    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = NA))
+  }
+  
+  matched_row <- filtered_reference[which.min(distances), ]
+  
+  return(list(matched_string = matched_row$clean_ADM3, 
+              ADM3_PCODE = matched_row$ADM3_PCODE, 
+              ADM3_EN = matched_row$ADM3_EN, 
+              distance = min_distance))
+}
+
+
+fuzzy_match <- function(target_string, dataframe, column_name, observatory_code, 
+                        max_distance = 0.25) {
+  # Filter the dataframe based on observatory_code
+  filtered_reference <- dataframe %>%
+    filter(OBS_CODE == observatory_code) %>%
+    select(all_of(column_name), ADM3_PCODE, ADM3_EN)
+  
+  # If filtered_reference is empty, return NA values
+  if (nrow(filtered_reference) == 0) {
+    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = 1))
+  }
+  
+  # Use stringdist to find the closest match
+  distances <- stringdist::stringdistmatrix(target_string, filtered_reference[[column_name]], method = "jw")
+  
+  min_distance <- min(distances)
+  
+  # Check for Inf distance and replace it with 1
+  if (is.infinite(min_distance)) {
+    min_distance <- 1
+  }
+  
+  # If min_distance exceeds the max_distance threshold, return NA values
+  if (min_distance > max_distance) {
+    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = NA))
+  }
+  
+  matched_row <- filtered_reference[which.min(distances), ]
+  
+  return(list(matched_string = matched_row[[column_name]], 
+              ADM3_PCODE = matched_row$ADM3_PCODE, 
+              ADM3_EN = matched_row$ADM3_EN, 
+              distance = min_distance))
+}
+
+fuzzy_match <- function(target_string, dataframe, column_name, observatory_code, 
+                        max_distance = 0.25) {
+  # Filter the dataframe based on observatory_code
+  filtered_reference <- dataframe %>%
+    filter(OBS_CODE == observatory_code) %>%
+    select(all_of(column_name), ADM3_PCODE, ADM3_EN)
+  
+  # If filtered_reference is empty, return NA values
+  if (nrow(filtered_reference) == 0) {
+    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = 1))
+  }
+  
+  # Use stringdist to find the closest match
+  distances <- stringdist::stringdistmatrix(target_string, filtered_reference[[column_name]], method = "jw")
+  
+  # If there are no valid distances, set min_distance to Inf (this should help avoid the error)
+  if(all(is.na(distances))) {
+    min_distance <- Inf
+  } else {
+    min_distance <- min(distances, na.rm = TRUE)  # Ensure NA values don't affect the min calculation
+  }
+  
+  # Check for Inf distance and replace it with 1
+  if (is.infinite(min_distance)) {
+    min_distance <- 1
+  }
+  
+  # If min_distance exceeds the max_distance threshold, return NA values
+  if (min_distance > max_distance) {
+    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = NA))
+  }
+  
+  matched_row <- filtered_reference[which.min(distances), ]
+  
+  return(list(matched_string = matched_row[[column_name]], 
+              ADM3_PCODE = matched_row$ADM3_PCODE, 
+              ADM3_EN = matched_row$ADM3_EN, 
+              distance = min_distance)) %>%
+  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
+}
+```
+
+
+## A Detailed Walk-through: Georeferencing in Action
+
+The process followed depends on the completeness/quality of the data obtained in the previous steps, so we follow it by 
+
+1. Where we have municipality names in the corresponding field: match these names with the names of the municipalities  already identified as data collection sites (the matching is segmented observatory by observatory to reduce the risk). There might be some writing variations so we use fuzzy matching, checking for the likelihood to have a valid match (and maybe enable a visual confirmation)
+
+
+```{r}
+# List of years
+years <- 1995:2014
+
+# Read all datasets and combine
+all_surveys_description <- map_df(years, function(year) {
+  df <- read_dta(paste0("Données ROR/enter/", year, "/res_deb.dta"))
+    # Convert all columns to character to ensure consistency
+  df <- df %>% mutate_all(as.character)
+  return(df)
+})
+
+# Extract unique combinations and list all the years they appeared in
+unique_combinations <- all_surveys_description %>%
+  group_by(j0, j42, j4) %>%
+  summarize(years = toString(year)) %>%
+  ungroup()
+
+# Harmonize the fields that contain municipality or village names
+unique_combinations <- unique_combinations %>%
+  mutate(clean_muni = clean_string(j42),
+         clean_village = clean_string(j4))
+obs_communes <- obs_communes %>%
+  mutate(clean_ADM3 = clean_string(ADM3_EN))
+pop_places <- pop_places %>%
+  mutate(clean_pname = clean_string(PLACE_NAME)) 
+
+# List of observatories for which municipalities have been identified
+identified_observatories <- unique(obs_communes$OBS_CODE) %>%
+  na.omit()
+# Filter for the observatory for which we already have a manual identification
+# of municipalities
+unique_combinations <- unique_combinations %>%
+  filter(j0 %in% identified_observatories) 
+
+# Apply the fuzzy matching observatory-wise
+results <- map2_df(unique_combinations$clean_muni, unique_combinations$j0, 
+                   ~ as.data.frame(t(fuzzy_match(.x, obs_communes$clean_ADM3, .y)))
+                   )
+
+results2 <- map2_df(unique_combinations$clean_muni, 
+                   unique_combinations$j0, 
+                   ~ as.data.frame(t(
+                     fuzzy_match(.x, obs_communes, "clean_ADM3", .y))))
+
+# Combine the results with the unique_combinations
+correspondence_table <- bind_cols(unique_combinations, results) 
+
+# Add a column for the matching method
+correspondence_table <- correspondence_table %>%
+  mutate(method = ifelse(!is.na(matched_string), "method_1", NA_character_))
+```
+
+As a result of this first matching step, we have the following number of successfully matched observations.
+
+```{r}
+correspondence_table %>%
+  mutate(`Geolocated municipalities at step 1` = 
+           ifelse(is.na(method), "Unmatched", "Matched")) %>%
+  group_by(`Geolocated municipalities at step 1`, is.na(j42)) %>% 
+  summarise(N = n()) %>%
+  mutate(Percentage = (N / sum(N) * 100),
+         Percentage = round(Percentage, 1)) %>%
+  gt()
+```
+
+We can visualize the output of this matches in a map.
+
+```{r}
+# Extract matched resuts
+matched_results <- unique(correspondence_table$ADM3_PCODE) %>%
+  na.omit()
+# Keep municipalities in those
+matched_spatial <- obs_communes %>%
+  filter(ADM3_PCODE %in% matched_results)
+
+tmap_mode("view")
+# Plot
+tm_shape(matched_spatial) +
+  tm_polygons(col = "OBS_NAME")
+```
+
+### Method 2
+
+For observations that had no municipality name. Try parsing the strings in the village name field to see if they contain a municipality name of a municipality already identified within the observatory surveyed municipalities.
+
+```{r}
+# Filter out matched municipalities and extract the first word
+unmatched_results <- correspondence_table %>%
+  filter(is.na(matched_string)) %>%
+  select(j0:clean_village) %>%
+  mutate(first_word = str_extract(clean_village, "^[^\\s/]+"))
+
+# Fuzzy matching with the first word and identified municipalities
+results_step2 <- map2_df(unmatched_results$first_word, 
+                         unmatched_results$j0, 
+                         ~ as.data.frame(t(
+                           fuzzy_match(.x, obs_communes$clean_ADM3, .y)))) %>%
+  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
+
+# Update Results
+potential_matches2 <- bind_cols(unmatched_results, results_step2)
+
+# Manually identify false positives and remove them
+false_positives <- c("madiromionga", "maroarla", "tsaratanteraka", 
+                    "ambatoharanana", "ambatoaranana", "maroala", "erakoja", 
+                    "erakoka", "maroalo", "erakka", "erakoa")
+validated_matches2 <- potential_matches2 %>%
+  mutate(across(c(matched_string, ADM3_PCODE, ADM3_EN, distance),
+               ~ ifelse(first_word %in% false_positives, NA, .)),
+         method = ifelse(!is.na(matched_string), "method_2", NA_character_))
+
+# Integrate new results in correspondence table
+correspondence_table <- correspondence_table %>%
+  filter(!is.na(matched_string)) %>%
+  bind_rows(validated_matches2)
+```
+
+Let's check how much we have now:
+
+```{r}
+correspondence_table %>%
+  group_by(matching_method = method) %>% 
+  summarise(N = n()) %>%
+  mutate(Percentage = (N / sum(N) * 100),
+         Percentage = round(Percentage, 1)) %>%
+  gt()
+```
+
+We still have a quarter of the localities unmatched.
+
+## Method 3
+
+Now let's see if I have clo
+
+```{r}
+# 1. Re-filter unmatched results
+unmatched_results_v2 <- correspondence_table %>%
+  filter(is.na(matched_string)) %>%
+  select(j0:clean_village)
+
+# 2. Perform the fuzzy matching
+results_step3 <- map2_df(unmatched_results_v2$clean_village, unmatched_results_v2$j0, 
+                         ~ {
+                           # Get the list of identified municipalities for this observatory
+                           identified_municipalities <- obs_communes %>%
+                             filter(OBS_CODE == .y) %>%
+                             pull(clean_ADM3)
+                           
+                           # Filter the pop_places to only those identified municipalities
+                           relevant_pop_places <- pop_places %>%
+                             filter(clean_pname %in% identified_municipalities)
+                           
+                           # Now perform the fuzzy matching
+                           as.data.frame(t(
+                             fuzzy_match(.x, relevant_pop_places$clean_pname, .y)
+                           ))
+                         })
+
+
+fuzzy_match <- function(target_string, reference_vector, observatory_code, 
+                        max_distance = 0.25) {
+  # Filter the obs_communes based on observatory_code
+  filtered_reference <- obs_communes %>%
+    filter(OBS_CODE == observatory_code) %>%
+    select(clean_ADM3, ADM3_PCODE, ADM3_EN)
+  
+  # If filtered_reference is empty, return NA values
+  if (nrow(filtered_reference) == 0) {
+    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = 1))
+  }
+  
+  # Use stringdist to find the closest match
+  distances <- stringdist::stringdistmatrix(target_string, filtered_reference$clean_ADM3, method = "jw")
+  
+  min_distance <- min(distances, na.rm = TRUE) # Adding na.rm = TRUE
+  
+  # Check for Inf or NA distance and replace it with 1
+  if (is.infinite(min_distance) || is.na(min_distance)) {
+    min_distance <- 1
+  }
+  
+  # If min_distance exceeds the max_distance threshold, return NA values
+  if (min_distance > max_distance) {
+    return(list(matched_string = NA, ADM3_PCODE = NA, ADM3_EN = NA, distance = NA))
+  }
+  
+  matched_row <- filtered_reference[which.min(distances), ]
+  
+  return(list(matched_string = matched_row$clean_ADM3, 
+              ADM3_PCODE = matched_row$ADM3_PCODE, 
+              ADM3_EN = matched_row$ADM3_EN, 
+              distance = min_distance))
+}
+
+
+# Update unmatched results with step 3 results
+unmatched_results_v2 <- bind_cols(unmatched_results_v2, results_step3) %>%
+  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
+```
+
+
+
+Where I have municipality names in the corresponding field, but no match was found : look for other possible match in the surrounding municipality (take the center of the group of identified municipalities and consider all municipalities in a given radius -- 100km would be a safe bet). Here too, the matching is implemented observatory by observatory.
+
+```{r}
+# Calculate centroids
+obs_centroids <- obs_communes %>%
+  filter(!is.na(OBS_CODE)) %>%
+  group_by(OBS_CODE) %>%
+  summarize(geom = st_centroid(st_union(geom)))
+
+
+# Identify nearby municipalities
+nearby_municipalities <- st_join(obs_centroids, obs_communes, 
+                                 join = st_is_within_distance, dist = 100000) 
+
+# 4. Fuzzy matching within the radius
+results_step3 <- map2_df(unmatched_results$first_word, unmatched_results$j0, 
+                         ~ as.data.frame(t(
+                           fuzzy_match(.x, nearby_municipalities$clean_ADM3, .y)
+                           ))) %>%
+  unnest(cols = c(matched_string, distance, ADM3_PCODE, ADM3_EN))
+# 5. Update Results
+potential_matches <- bind_cols(unmatched_results, results_step2) 
+```
+
+This method gives no results for these R observatory
+
+3. For all the observations where a match was found in step 1 and 2, work on the matching of the content of the village field. Here we take advantage that the commune PCODE correspond between the subnational dataset (registered as ADM3_PCODE) and the populated places dataset (registered as COM_PCODE) to restrict the fuzzy matching to the populated places of the corresponding municipality.
+
+
+5. For the observations that could not be matched in the two previous steps (either because matches did not  work, or because the municipality field was empty), match the values of their “village name” to the village name of observations that were successfully matched at step 3. Here we should assess the reliability of the match, and if the reliability is high, automatically fetch the municipality name of the match.
+
+
+6. For cases that could not be matched at step 6, use the field j5, which is the identification number of the household, to see if it has been surveyed in a previous or subsequent year and if its georeferencing  could be done at another year and, if so retrieve the corresponding information.
+7. For the remaining ones try identifying directly from the village name: first among the populated places of the identified municipalies, and second within a 30 km radius.
+
+
+
+
+Data Pre-processing and Addressing Discrepancies
+The Georeferencing Process: Step-by-step with R Code
+Visualization and Continuous Quality Validation
+
+## Validating the Quality of Georeferenced Data
+Quantitative and Qualitative Metrics
+Comparison with Existing Georeferenced Data
+Addressing and Rectifying Discrepancies
+
+## Conclusion
+Key Findings and Takeaways
+Recommendations for Further Improvement in Data Georeferencing
