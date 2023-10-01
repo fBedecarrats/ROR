@@ -1,17 +1,31 @@
 ---
 title: "Georeferencing Annual Household Surveys in Rural Madagascar: A Comprehensive Analysis of Observatories (1995-2014)"
 author: "Florent Bédécarrats"
-format: html
+format:
+  html:
+    toc: true
+    output-file: index.html
+    embed-resources: true
+    standalone: true
+    code-fold: true
+    
+execute:
+  warning: false
+  error: false
+editor: visual
 editor_options: 
   chunk_output_type: console
 ---
 
 ## Introduction
-Background of the Study
-Objective of the Georeferencing
-A notebook approach based on R and Quarto
 
-```{r}
+This document serves as a technical appendix accompanying the paper tied to opening of the data collected by the Rural observatory network (ROR, for its acronym in French) from 1995 to 2014. The ROR was a panel survey system that monitored the living conditions of populations in selected localities representing the diversity of rural contrxts in Madagascar. While the ROR data underwent a rigorous supervision and curation process during its collection phase, complemented by an exhaustive harmonization effort subsequently, its geolocation attributes remain largely incomplete. This absence of usable geographic reference in the data hinders its integration with other spatially-referenced datasets, particularly when one contemplates its utility in realms such as public policy formulation or project evaluation.
+
+This study endeavors to bridge this gap through a meticulous georeferencing process. The primary objective is to reconcile the somewhat erratic spatial denominations, or toponyms, found within the ROR dataset with a more standardized spatial database. Ultimately, this effort aims to establish a congruent correspondence between each observation from the ROR survey and both a polygon representing a Malagasy municipality and a referential village point.
+
+To achieve this in a reliable way that enables external verification and subsequent improvements, we harness the capabilities of computational notebooks (Quarto format). As interactive computing environments, these notebooks facilitate an amalgamation of code, computational output, explanatory text, and multimedia resources. We use R for the code, as it offeres a high versatility to handle spatial data, complex surveys and textual informaiton. By adopting this methodology, we aim to bolster the reliability and usability of the ROR data for spatial analysts and researchers.
+
+```{r load_libraries}
 library(tidyverse)    # A series of packages for data manipulation
 library(haven)        # Required for reading STATA files (.dta)
 library(labelled)     # To work with labelled data from STATA
@@ -22,15 +36,141 @@ library(tmap)         # for mapping
 library(fuzzyjoin)    # for fuzzy joining
 library(readxl)       # Read data frames to Excel format
 library(writexl)      # Write data frames to Excel format
-library(gt)
+library(gt)           # for nicely formatted tables
+library(cowplot)      # to combine plots
 ```
 
-
 ## Revisiting the Rural Observatories (ROR) of Madagascar
-Historical Background
-Significance in Rural Development and Policy Decisions
+
+The Rural Observatory Network (ROR) was established as part of the Madio project (1994-1999), a technical assistance program of the IRD to the national statistical institute (INSTAT) of Madagascar, as an innovative mechanism for monitoring and analyzing the country's agricultural sector. This initiative arose from the urgent need to compile statistics on the agricultural industry due to the breakdown of the existing statistical system following the socialist era and political turmoil in the country. 
+
+Four initial observatories were established in 1995, each representing a different set of agricultural challenges in the country's diverse ecosystems. From 1995 to 2015, 22 other observatories were created, and existing were abandoned (see @fig-hist-ror). The ROR were supported by a variety of donors and NGOs during this period: European union, AFD, World Bank, GTZ, Swiss cooperation, Care and Rio Tinto. The selection of observation sites was based on a combination of criteria, including agroclimatic areas, dominant production systems, population density, accessibility, and the presence of support structures and development projects. These observatories aimed to provide insights into the dynamics of Malagasy agriculture, covering a range of issues such as isolated coastal communities of fishermen and livestock farmers, the impact of trade liberalization on vanilla producers, family smallholdings in the central plateau, and the restructuring of large irrigated rice-growing areas. 
+
+
+```{r}
+#| label: fig-hist-ror
+#| fig-cap: "Coarse location of rural observatory and survey years"
+
+# Define a function to load and count surveys per observatory for a given year
+load_and_count <- function(year, factorize = FALSE) {
+  # Define file path
+  file_path <- paste0("Données ROR/enter/", year, "/res_deb.dta")
+  
+  # Load data
+  data <- read_dta(file_path)
+  
+  # Extract label and convert to factors if option
+  if (factorize) {
+    data <- data %>%
+      mutate(across(everything(), as.character),
+             across(where(is.labelled), ~ as.character(as_factor(.))))
+  }
+  
+  # Count surveys per observatory
+  count_data <- data %>%
+    group_by(j0) %>%
+    summarise(survey_count = n()) %>%
+    ungroup() %>%
+    mutate(year = year)  # Add year column
+  
+  return(count_data)
+}
+
+# Generate a list of years
+years <- 1995:2014
+
+# Use purrr::map_df to loop through each year and bind results
+obs_count <- map_df(years, load_and_count) %>%
+  # Remove rows with observatory "7 " and "NA", whch are errors
+  filter(j0 != 7 & !is.na(j0)) %>%
+  rename(observatory = j0)
+
+# Read observatory names
+observatory_names <- readxl::read_xlsx("Observatory_names.xlsx") %>%
+  select(code, observatory_name = name)
+
+# PAss it to wide.
+obs_count <- obs_count %>%
+  left_join(observatory_names, by = c("observatory" = "code")) %>%
+  group_by(observatory_name, year) %>%
+  summarise(survey_count = sum(survey_count))
+
+obs_count_wide <- obs_count %>%
+  pivot_wider(names_from = year, values_from = survey_count)
+
+# Add observatory approximate location
+locations <- tibble(
+  code = c(1, 2, 3, 4, 12, 13, 15, 16, 21, 22, 23, 24, 31, 25, 41, 42, 43, 51, 
+           44, 45, 61, 17, 18, 19, 71, 52),
+  name = c("Antalaha", "Antsirabe", "Marovoay", "Toliara", "Antsohihy", 
+           "Tsiroanomandidy-Bongo", "Farafangana", "Ambovombe", 
+           "Alaotra", "Manjakandriana", "Toliara littoral", 
+           "Fenerive Est", "Bekily", "Mahanoro", "Soaviandriana-Itasy", 
+           "Menabe-Belo", "Fianarantsoa", "Tsivory", "Morondava", "Manandriana", 
+           "Tanandava", "Ihosy", "Ambohimahasoa", "Manakara", "Tolanaro", 
+           "Menabe-Nord-Est"),
+  latitude = c(-14.8833, -19.8659, -16.1000, -23.3558, -14.8796, -18.7713, 
+               -22.8167, -25.1667, -17.8319, -18.9167, -23.3558, -17.3500, 
+               -24.6900, -19.9000, -19.1686, -19.6975, -21.4527, -24.4667, 
+               -20.2833, -20.2333, -22.5711, -22.4000, -20.7145, -22.1333, 
+               -25.0381, -20.5486),
+  longitude = c(50.2833, 47.0333, 46.6333, 43.6683, 47.9875, 46.0546, 47.8333, 
+                46.0833, 48.4167, 47.8000, 43.6683, 49.4167, 45.1700, 48.8000,
+                46.7354, 44.5419, 47.0857, 45.4667, 44.2833, 47.3833, 45.0439, 
+                46.1167, 47.0389, 48.0167, 46.9562, 47.1597))
+
+obs_count <- left_join(obs_count, locations, by = c("observatory_name" = "name"))
+
+
+madagascar <- st_read("../Entités administratives/OCHA_BNGRC frontières administratives/mdg_admbnda_adm0_BNGRC_OCHA_20181031.shp",
+                      quiet = TRUE)
+
+# Sort locations by latitude to generate sequence numbers
+locations <- locations %>%
+  arrange(desc(latitude)) %>%
+  mutate(seq_num = 1:n())
+
+# Create map plot with labels
+map_plot <- ggplot(data = madagascar) +
+  geom_sf(fill = "lightgray") +
+  geom_point(data = locations, aes(x = longitude, y = latitude, color = name), 
+             size = 3) +
+  geom_text(data = locations, aes(x = longitude, y = latitude, label = seq_num), 
+            vjust = -1, hjust = 1, size = 3) + 
+  theme_void() +
+  theme(legend.position = "none")
+
+# Add sequence numbers to observatory names in obs_count dataframe
+obs_count <- obs_count %>%
+  left_join(locations %>%
+              select(name, seq_num), 
+            by = c("observatory_name" = "name")) %>%
+  mutate(observatory_with_num = paste0(seq_num, ". ", observatory_name))
+
+# Create timeline plot using modified obs_count with observatory_with_num
+timeline_plot <- ggplot(obs_count, 
+                        aes(x = year, 
+                            y = fct_reorder(observatory_with_num, latitude), 
+                            color = observatory_name)) +
+  geom_point(aes(size = survey_count), show.legend = F) +
+  theme_minimal() +
+  labs(y = NULL, x = NULL) +
+  theme(axis.text.y = element_text(size = 8),
+        legend.position = "none")
+
+# Stitch the plots together
+combined_plot <- plot_grid(map_plot, timeline_plot, rel_widths = c(1.3, 2))
+
+ggsave("../../Protocole/Figures/ROR_history.png", plot = combined_plot, 
+       width = 10, height = 7, dpi = 300)
+
+print(combined_plot)
+```
+
+This set-up was particularly significant for rural development and macroeconomic policy decisions. In the mid-1990s, This initiative was motivated by an urgent need to compile statistics on the agricultural industry due to the breakdown of the existing statistical system. This became crucial as Madagascar experienced significant changes in its rural areas since 1980, particularly with the liberalization of pricing and marketing structures. The Madagascar ROR arose as a part of the broader trend of socio-economic observatories that emerged in sub-Saharan Africa in the 1980s. These observatories are information systems designed to assess changes in society and their impact on specific populations, emphasizing poverty reduction, combating exclusion, and promoting sustainable human development.
 
 ### Challenges for opening the data
+
 In this notebook, our primary objective is to enhance the georeferencing of the ROR survey data for open data sharing. The initial ROR survey, initiated in 1995, recorded geographical information in varying formats: from "village" to a combination of "municipality", "village", and "site". A significant challenge arose from the fact that while data collection started in 1995, municipalities were only formally established in 1994, with several years required for stabilization. The inherent fluidity in toponyms, predominantly derived from oral traditions, resulted in varied written representations. Our endeavor is to identify, disambiguate, and georeference observations recorded in the ROR data, adopting the Common Operational Datasets (CODs) as a reference, which has been collaboratively defined by OCHA and Madagascar's BNGRC (National Disaster Management Office).
 
 CODs stand as the bedrock for all preparedness and response operations, especially within the humanitarian sector. Adopted by the IASC in 2008 and revised in 2010, these datasets are pivotal for facilitating informed decision-making during the critical initial hours of a crisis. By ensuring consistency among stakeholders, they simplify data management and establish a shared operational picture of a crisis. Particularly relevant for our purpose is the incorporation of P-codes in CODs. These unique geographic identification codes, found in both Administrative Boundary CODs (COD-ABs) and Population Statistics CODs (COD-PSs), surmount challenges posed by variations in placenames and spellings. For instance, in Madagascar, 81 different administrative level 4 (ADM4) features are labeled "Morafeno", with six of these existing within ADM3 features also termed "Morafeno", distinguishable solely by their unique ADM2 features.
@@ -39,9 +179,9 @@ P-codes act as reliable geographic identifiers, eliminating errors arising from 
 
 ## Data Description and Initial Exploration with R
 
-###  ROR survey data
+### ROR survey data
 
-The ROR survey data is organized in a collection of year-specfic folders ranging from 1995 to 2015. Each yearly folder houses multiple .dta files (Stata data format) – about 85 per year – with diverse filenames such as "res_as.dta" and "res_bp.dta". Although there's an element of harmonization achieved, especially regarding certain variables and household identifiers, the data varies in terms of geographical granularity. Initial years primarily provide a singular field denoting the village name. As the years progress, this evolves to include a municipality name, and in the latter years, an additional "site" name occasionally appears. A comprehensive overview of the observations can be gleaned from the "res_deb.dta" files within each year.
+The ROR survey data is organized in a collection of year-specfic folders ranging from 1995 to 2015. Each yearly folder houses multiple .dta files (Stata data format) -- about 85 per year -- with diverse filenames such as "res_as.dta" and "res_bp.dta". Although there's an element of harmonization achieved, especially regarding certain variables and household identifiers, the data varies in terms of geographical granularity. Initial years primarily provide a singular field denoting the village name. As the years progress, this evolves to include a municipality name, and in the latter years, an additional "site" name occasionally appears. A comprehensive overview of the observations can be gleaned from the "res_deb.dta" files within each year.
 
 ```{r}
 # Function to extract variable info for a given year and file
@@ -87,36 +227,35 @@ variable_dictionary <- all_vars %>%
 write_xlsx(variable_dictionary, "ROR_Variable_Dictionary.xlsx")
 ```
 
-
-The code block above creates a data dictionnary, which you can download by clicking  [on this link](ROR_Variable_Dictionary.xlsx).
+The code block above creates a data dictionnary, which you can download by clicking [on this link](ROR_Variable_Dictionary.xlsx).
 
 ### Administrative boundaries
 
-The "Madagascar Subnational Administrative Boundaries" dataset is sourced from the Common Operational Datasets (CODs), which offer authoritative reference datasets vital for decision-making during humanitarian operations. Specifically designed to streamline the discovery and exchange of pivotal data, CODs ensure uniformity and use the 'best available' datasets. This particular dataset focuses on administrative boundaries, including gazetteers with P-codes, facilitating organized humanitarian assessments and data management. P-codes act as unique identifiers for every administrative unit and populated area, ensuring standardization in nomenclature. When datasets adhere to the P-code standard, their integration and analysis become efficient. The dataset provides comprehensive boundary information for Madagascar at five administrative levels: country, region, district, commune, and fokontany. It's accessible for download as shapefiles from [the provided link](https://data.humdata.org/dataset/cod-ab-mdg).
+The "Madagascar Subnational Administrative Boundaries" dataset is sourced from the Common Operational Datasets (CODs), which offer authoritative reference datasets for decision-making during humanitarian operations. Specifically designed to streamline the discovery and exchange of pivotal data, CODs ensure uniformity and use the 'best available' datasets. This particular dataset focuses on administrative boundaries, including gazetteers with P-codes, facilitating organized humanitarian assessments and data management. P-codes act as unique identifiers for every administrative unit and populated area, ensuring standardization in nomenclature. When datasets adhere to the P-code standard, their integration and analysis become efficient. The dataset provides comprehensive boundary information for Madagascar at five administrative levels: country, region, district, commune, and fokontany. It's accessible for download as shapefiles from [the provided link](https://data.humdata.org/dataset/cod-ab-mdg).
 
 ### Localities
 
-The "Madagascar Populated Places" dataset is part of the Common Operational Datasets (CODs). This dataset encompasses populated place points for Madagascar. The data has been sourced from the National Geospatial-Intelligence Agency and provided by the University of Georgia - ITOS. Further, the Geographic Information Support Team (GIST) has taken up the role of distributor, with the data being published on 2007-03-07. UN OCHA ROSA has enhanced the dataset by adding P-codes and administrative boundary names, which are based on the BNGRC (National Disaster Management Office) data. The dataset geolocates 28184 populated places with their toponyms (names), codes related to various administrative levels such as fokontany, commune, district, and region, and their spatial coordinates.
+The "Madagascar Populated Places" dataset is also part of the Common Operational Datasets (CODs). This dataset encompasses populated place points for Madagascar. The data has been sourced from the National Geospatial-Intelligence Agency and provided by the University of Georgia - ITOS. Further, the Geographic Information Support Team (GIST) has taken up the role of distributor, with the data being published on 2007-03-07. UN OCHA ROSA has enhanced the dataset by adding P-codes and administrative boundary names, which are based on the BNGRC (National Disaster Management Office) data. The dataset geolocates 28184 populated places with their toponyms (names), codes related to various administrative levels such as fokontany, commune, district, and region, and their spatial coordinates.
 
 ```{r}
 # Load datasets
 ROR_surveys_2007 <- read_dta("Données ROR/enter/2007/res_deb.dta")
 observatory_names <- read_xlsx("Observatory_names.xlsx")
 obs_communes <- st_read(
-  "data/observatoires/Observatoires_ROR_communes_COD.gpkg") %>%
+  "data/observatoires/Observatoires_ROR_communes_COD.gpkg",
+  quiet = TRUE) %>%
   left_join(select(observatory_names, name, code), 
             by = c("OBS_NAME" = "name")) %>%
   rename(OBS_CODE = code)
 pop_places <- st_read(
-  "../entités administratives/OCHA_BNGRC populated places/mdg_pplp_places_NGA_OCHA.shp")
+  "../entités administratives/OCHA_BNGRC populated places/mdg_pplp_places_NGA_OCHA.shp", quiet = TRUE)
 ```
-
 
 ## Methodology
 
 ### Simplify strings
 
-The cases can be a problem, as well as the fact that some attibutes of the toponyms are used sometimes in Malagasy and Sometimes in French.
+The treatment of toponyms presents a unique challenge, especially when these names are captured from varied sources. In the dataset, these names can vary due to differences in languages, case sensitivity, and the inclusion of additional descriptive terms. To address this, the `clean_string` function was developed. This function begins by converting all strings to lowercase, ensuring that subsequent comparisons are not sensitive to case variations. Next, to create a uniform standard, all non-alphanumeric characters are removed, retaining only spaces and the alphanumeric content. Common qualifiers in toponyms, such as "centre", "haut" (high) or "bas" (low), which are not used consistently across records, are also removed. Given the bilingual nature of the dataset, with entries potentially in both Malagasy and French, the function translates cardinal points to the Malagasy language to ensure uniformity. Lastly, certain locales with multiple names, such as "Fort Dauphin", also known as "Taolagnaro", "Tolagnaro" or "Tolanaro", are standardized to a single term, "Tolanaro", to eliminate potential disparities.
 
 ```{r}
 # A function to harmonize cases and usual variation in the way localities are 
@@ -143,7 +282,8 @@ clean_string <- function(x){
 
 ### Fuzzy matching
 
-Fuzzy matching is a process that identifies non-exact matches of your query string/pattern. Unlike the traditional matching methods, which require an exact match, fuzzy matching captures the records that are likely to be relevant. It computes a similarity score between the strings being compared, allowing for minor discrepancies such as typos, added or missing characters, and more. This is especially useful in scenarios where data might come from various sources, with slight variations in spelling or naming conventions. A common metric for this is the "Levenshtein distance" which counts the number of edits needed to change one string into another.
+By default, statistical softwares and computing language match text by pairing only identical strings. Exact string matching is inappropriate in our context, where location data entry was subject to human errors like typographical mistakes or minor variations in spelling. To counteract this rigidity, fuzzy matching is employed. This approach gauges the similarity between two strings, bypassing the need for an exact character-to-character match. The principle metric adopted for this is the "Levenshtein distance", which quantifies the minimum number of single-character edits required to change one string into another. The `fuzzy_match` function encapsulates this approach. The function initiates the process by filtering the reference list of encontered toponyms based on a given observatory code, which considerably narrows down potential matches. Then, using the Jaro-Winkler distance metric — a variant of the Levenshtein distance particularly suited for shorter strings — the function computes the similarity between the target string and entries in the filtered reference. To ensure that only relevant matches are acknowledged, a threshold, termed max_distance, is set. Matches that exceed this threshold are disregarded. For those that pass this validation, the function then extracts the pertinent details of the matched row from the reference dataframe.
+
 
 ```{r}
 fuzzy_match <- function(target_string, dataframe, column_name, observatory_code, 
@@ -187,15 +327,78 @@ fuzzy_match <- function(target_string, dataframe, column_name, observatory_code,
 }
 ```
 
+### Hierarchical matching of data
 
-## A Detailed Walk-through: Georeferencing in Action
+The hierarchical organization of spatial entities is key for our challenge. Such an organization allows for a cascading representation of data, from broader scopes narrowing down to more specific layers. This representation is reminiscent of the ontological order of geographical entities: regions contain provinces, which encompass municipalities, and these in turn house localities. In the georeferencing context, leveraging this hierarchical structure can lead to more precise matches. For instance, if an observatory code is associated with a specific district, the search for matches is confined to that distict, enhancing both the efficiency and accuracy of the process. @fig-spatial-hierarchies elucidates this hierarchical arrangement, serving as a roadmap for the subsequent data matching tasks.
 
-The process followed depends on the completeness/quality of the data obtained in the previous steps, so we follow it by 
+```{mermaid}
+graph TD
+
+A[Legend]
+
+W[ ]
+X[ ]
+Y[ ]
+Z[ ]
+
+W -->|Pre-definede hierarchy| X
+Y -.-|Implemented matching|Z
+```
+```{mermaid}
+%%| label: fig-spatial-hierarchies
+%%| fig-cap: Spatial entities pre-defined relationship and matching
+
+
+graph TD
+
+%% Administrative Logic
+subgraph "Administrative Logic"
+A[Region]
+B[District]
+C[Commune]
+D[Fokontany]
+I[Populated places]
+
+A --> B
+B --> C
+C --> D
+D --> I
+end
+
+%% Observatory Logic
+
+subgraph "Observatory Logic"
+E[Observatory network]
+F[Observatory]
+G[Commune]
+H[Village]
+J[Site]
+
+E --> F
+F --> G
+G --> H
+F --> H
+H--> J
+end
+
+%% Geospatial matching
+H -.- I
+C -.- G
+```
+
+The current administrative strucure is defined as follows, regions include Districs, which include communes which include Fokontany. Fokontany refers on principles to a village, but in practice it often encompasses a series of villages or populated places. Note that communes where formalized in 1994 but their implementation took time. The concept of "communes" predates 1994, but before the decentralizatoin law they were merely a administrative representation of the local government. Regions were created in 2004.
+On the ROR side, observatory refereed during the first surveys to villages. A systematic registry of the communes only started in the 2004 and 2005 round, depending on the observatories. A mention to "sites" also appeared in 2011 but was scarcely documented.
+Our strategy was to established links between the village information and populated places, and between communes.
+
+## A Detailed walk-through
+
+As a starting point we browsed the documentation and documented, in the COD subnational data adding a field `OBS_Y_N`, with the value 1 if the municipality was reported as included into an observervatory survey (or empty otherwise), and `OBS_NUM` with the number of the corresponding observatory (or empty if not reported as surveyed). The list of observatory and corresponding surveyed municipalities is presented in the \[table X\].
+
+The process followed then applied 4 subsequent geolocation phases, all of which are totally n the completeness/quality of the data obtained in the previous steps, so we follow it by
 
 ### Method 1
 
-Where we have municipality names in the corresponding field: match these names with the names of the municipalities  already identified as data collection sites (the matching is segmented observatory by observatory to reduce the risk). There might be some writing variations so we use fuzzy matching, checking for the likelihood to have a valid match (and maybe enable a visual confirmation)
-
+Where we have municipality names in the corresponding field: match these names with the names of the municipalities already identified as data collection sites (the matching is segmented observatory by observatory to reduce the risk). There might be some writing variations so we use fuzzy matching, checking for the likelihood to have a valid match (and maybe enable a visual confirmation)
 
 ```{r}
 # List of years
@@ -245,19 +448,6 @@ correspondence_table <- bind_cols(unique_combinations, results)
 # Add a column for the matching method
 correspondence_table <- correspondence_table %>%
   mutate(method = ifelse(!is.na(matched_string), "method_1", NA_character_))
-```
-
-As a result of this first matching step, we have the following number of successfully matched observations.
-
-```{r}
-correspondence_table %>%
-  mutate(`Geolocated municipalities at step 1` = 
-           ifelse(is.na(method), "Unmatched", "Matched")) %>%
-  group_by(`Geolocated municipalities at step 1`, is.na(j42)) %>% 
-  summarise(N = n()) %>%
-  mutate(Percentage = (N / sum(N) * 100),
-         Percentage = round(Percentage, 1)) %>%
-  gt()
 ```
 
 We can visualize the output of this matches in a map.
@@ -312,19 +502,6 @@ correspondence_table <- correspondence_table %>%
   bind_rows(validated_matches2)
 ```
 
-Let's check how much we have now:
-
-```{r}
-correspondence_table %>%
-  group_by(matching_method = method) %>% 
-  summarise(N = n()) %>%
-  mutate(Percentage = (N / sum(N) * 100),
-         Percentage = round(Percentage, 1)) %>%
-  gt()
-```
-
-We still have a quarter of the localities unmatched.
-
 ### Method 3
 
 Now let's see if I have clo
@@ -369,19 +546,6 @@ correspondence_table <- correspondence_table %>%
   bind_rows(validated_matches3)
 ```
 
-Let's check how much we have now:
-
-```{r}
-correspondence_table %>%
-  group_by(matching_method = method) %>% 
-  summarise(N = n()) %>%
-  mutate(Percentage = (N / sum(N) * 100),
-         Percentage = round(Percentage, 1)) %>%
-  gt()
-```
-
-We still have 14% of the localities unmatched.
-
 ### Method 4
 
 For the remaining, let's try matching with other village names for which municipality has been matched.
@@ -423,19 +587,6 @@ correspondence_table <- correspondence_table %>%
   filter(!is.na(matched_string)) %>%
   bind_rows(validated_matches4)
 ```
-
-Let's check how much we have now:
-
-```{r}
-correspondence_table %>%
-  group_by(matching_method = method) %>% 
-  summarise(N = n()) %>%
-  mutate(Percentage = (N / sum(N) * 100),
-         Percentage = round(Percentage, 1)) %>%
-  gt()
-```
-
-We're good!
 
 ## Matching villages
 
@@ -506,6 +657,30 @@ correspondence_table_updated <- bind_cols(correspondence_table, results_village_
 
 ```
 
+## Validating the Quality of Georeferenced Data
+
+### Quantitative metrics
+
+We assess the unique observations that could be matched at each steps.
+
+```{r}
+correspondence_table %>%
+  mutate(`Geolocated municipalities at step 1` = 
+           ifelse(is.na(method), "Unmatched", "Matched")) %>%
+  group_by(`Geolocated municipalities at step 1`, is.na(j42)) %>% 
+  summarise(N = n()) %>%
+  mutate(Percentage = (N / sum(N) * 100),
+         Percentage = round(Percentage, 1)) %>%
+  gt()
+```
+
+### Consistency check with documentation
+
+Check that we have villages in all the municipalities
+
+Comparison with the ROR registries
+
+### Visual exploration and avenues for continuous corrections
 
 Visualizing the data
 
@@ -547,7 +722,8 @@ correspondence_table_updated <- correspondence_table_updated[!is.na(corresponden
 correspondence_sf <- st_as_sf(correspondence_table_updated, coords = c("longitude", "latitude"), crs = 4326)
 #########################################################################
 
-Vahatra <- st_read("../Aires protégées/Vahatra/Shapefiles/AP_Vahatra.shp")
+Vahatra <- st_read("../Aires protégées/Vahatra/Shapefiles/AP_Vahatra.shp", 
+                   quiet = TRUE)
 
 # Plot
 tmap_mode("view")
@@ -561,16 +737,8 @@ tm_shape(matched_spatial) +
 
 ```
 
-
-Data Pre-processing and Addressing Discrepancies
-The Georeferencing Process: Step-by-step with R Code
-Visualization and Continuous Quality Validation
-
-## Validating the Quality of Georeferenced Data
-Quantitative and Qualitative Metrics
-Comparison with Existing Georeferenced Data
 Addressing and Rectifying Discrepancies
 
 ## Conclusion
-Key Findings and Takeaways
-Recommendations for Further Improvement in Data Georeferencing
+
+Key Findings and Takeaways Recommendations for Further Improvement in Data Georeferencing
