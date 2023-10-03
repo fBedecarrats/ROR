@@ -1,6 +1,7 @@
 ---
 title: "Georeferencing Annual Household Surveys in Rural Madagascar: A Comprehensive Analysis of Observatories (1995-2014)"
 author: "Florent Bédécarrats"
+abstract: "This technical appendix accompanies a forthcoming data paper. It focuses on the georeferencing process of household panel data collected by the Rural Observatory Network (ROR) from 1995 to 2014. The ROR captured information about the diverse rural contexts in Madagascar. While the quality data gathered was carefully curated, its geolocation attributes were not fully curated, restricting its utility in spatially integrated research or public policy evaluation. This appendix systematically aligns the varying spatial denominations found in the ROR dataset with a standardized geographic database, to provide a consistent correlation between each ROR observation and corresponding geospatial entities, namely communes and fokontany. We do so leveraging computational notebooks, specifically the Quarto format, utilizing the R programming language. This interactive setup fosters a blend of code, outcomes, explanations, and multimedia resources, ensuring that the ROR data becomes more dependable and user-friendly for spatial analysts and other researchers."
 format:
   html:
     toc: true
@@ -16,6 +17,8 @@ editor: visual
 editor_options: 
   chunk_output_type: console
 ---
+
+> **Note:** To pilot-test our georeferencing approach, we tested it with 8 observatories (out of the 26 of the rural observatory network). We prioritized the observatories that were in the vicinity of protected areas, as it exemplifies the usefulness of our approach. This procedure will soon be extended to the 18 other observatories.
 
 ## Introduction
 
@@ -38,6 +41,7 @@ library(readxl)       # Read data frames to Excel format
 library(writexl)      # Write data frames to Excel format
 library(gt)           # for nicely formatted tables
 library(cowplot)      # to combine plots
+library(gtsummary)    # to produce nice summary tables
 ```
 
 ## Revisiting the Rural Observatories (ROR) of Madagascar
@@ -255,11 +259,9 @@ pop_places <- st_read(
 
 ### Simplify strings
 
-The treatment of toponyms presents a unique challenge, especially when these names are captured from varied sources. In the dataset, these names can vary due to differences in languages, case sensitivity, and the inclusion of additional descriptive terms. To address this, the `clean_string` function was developed. This function begins by converting all strings to lowercase, ensuring that subsequent comparisons are not sensitive to case variations. Next, to create a uniform standard, all non-alphanumeric characters are removed, retaining only spaces and the alphanumeric content. Common qualifiers in toponyms, such as "centre", "haut" (high) or "bas" (low), which are not used consistently across records, are also removed. Given the bilingual nature of the dataset, with entries potentially in both Malagasy and French, the function translates cardinal points to the Malagasy language to ensure uniformity. Lastly, certain locales with multiple names, such as "Fort Dauphin", also known as "Taolagnaro", "Tolagnaro" or "Tolanaro", are standardized to a single term, "Tolanaro", to eliminate potential disparities.
+The treatment of toponyms presents a unique challenge, especially when these names are captured from varied sources. In the dataset, these names can vary due to differences in languages, case sensitivity, and the inclusion of additional descriptive terms. To address this, the `clean_string` function was developed. This function begins by converting all strings to lowercase, ensuring that subsequent comparisons are not sensitive to case variations. Next, to create a uniform standard, all non-alphanumeric characters are removed, retaining only spaces and the alphanumeric content. Common qualifiers in toponyms, such as "centre", "haut" (high) or "bas" (low), which are not used consistently across records, are also removed. Given the bilingual nature of the dataset, with entries potentially in both Malagasy and French, the function translates cardinal points to the Malagasy language to ensure uniformity. Lastly, certain locales with multiple names, such as "Fort Dauphin", also known as "Taolagnaro", "Tolagnaro" or "Tolanaro", are standardized to a single term, "Tolanaro", to eliminate potential disparities. We also address instances of Roman numerals from I to VI, converting them to their Arabic numeral counterparts, ensuring consistent representation across records.
 
 ```{r}
-# A function to harmonize cases and usual variation in the way localities are 
-# written in the survey data
 clean_string <- function(x){
   x %>%
     tolower() %>% # Convert to lowercase
@@ -275,14 +277,20 @@ clean_string <- function(x){
     str_replace_all("\\bsud\\b", "atsimo") %>% 
     str_replace_all("\\batsinana\\b", "atsinanana") %>% # Replace short form 
     str_replace_all("(fort dauphin)|(taolagnaro)|(tolagnaro)", 
-                    "tolanaro") # Variations for fort dauphin
-    
+                    "tolanaro") %>% # Variations for fort dauphin
+    # Convert Roman numerals to Arabic
+    str_replace_all("\\bi\\b", "1") %>% 
+    str_replace_all("\\bii\\b", "2") %>%
+    str_replace_all("\\biii\\b", "3") %>% 
+    str_replace_all("\\biv\\b", "4") %>% 
+    str_replace_all("\\bv\\b", "5") %>% 
+    str_replace_all("\\bvi\\b", "6")
 }
 ```
 
 ### Fuzzy matching
 
-By default, statistical softwares and computing language match text by pairing only identical strings. Exact string matching is inappropriate in our context, where location data entry was subject to human errors like typographical mistakes or minor variations in spelling. To counteract this rigidity, fuzzy matching is employed. This approach gauges the similarity between two strings, bypassing the need for an exact character-to-character match. The principle metric adopted for this is the "Levenshtein distance", which quantifies the minimum number of single-character edits required to change one string into another. The `fuzzy_match` function encapsulates this approach. The function initiates the process by filtering the reference list of encontered toponyms based on a given observatory code, which considerably narrows down potential matches. Then, using the Jaro-Winkler distance metric — a variant of the Levenshtein distance particularly suited for shorter strings — the function computes the similarity between the target string and entries in the filtered reference. To ensure that only relevant matches are acknowledged, a threshold, termed max_distance, is set. Matches that exceed this threshold are disregarded. For those that pass this validation, the function then extracts the pertinent details of the matched row from the reference dataframe.
+By default, statistical softwares and computing language match text by pairing only identical strings. Exact string matching is inappropriate in our context, where location data entry was subject to human errors like typographical mistakes or minor variations in spelling. To avoid this rigidity, fuzzy matching is employed. This approach gauges the degree of similarity between two strings, bypassing the need for an exact character-to-character match. The principle metric adopted for this is the "Levenshtein distance", which quantifies the minimum number of single-character edits required to change one string into another. The `fuzzy_match` function encapsulates this approach. The function initiates the process by filtering the reference list of encontered toponyms based on a given observatory code, which considerably narrows down potential matches. Then, using the Jaro-Winkler distance metric — a variant of the Levenshtein distance particularly suited for shorter strings — the function computes the similarity between the target string and entries in the filtered reference. To ensure that only relevant matches are acknowledged, a threshold, termed max_distance, is set. Matches that exceed this threshold are disregarded. For those that pass this validation, the function then extracts the pertinent details of the matched row from the reference dataframe.
 
 
 ```{r}
@@ -329,9 +337,10 @@ fuzzy_match <- function(target_string, dataframe, column_name, observatory_code,
 
 ### Hierarchical matching of data
 
-The hierarchical organization of spatial entities is key for our challenge. Such an organization allows for a cascading representation of data, from broader scopes narrowing down to more specific layers. This representation is reminiscent of the ontological order of geographical entities: regions contain provinces, which encompass municipalities, and these in turn house localities. In the georeferencing context, leveraging this hierarchical structure can lead to more precise matches. For instance, if an observatory code is associated with a specific district, the search for matches is confined to that distict, enhancing both the efficiency and accuracy of the process. @fig-spatial-hierarchies elucidates this hierarchical arrangement, serving as a roadmap for the subsequent data matching tasks.
+The hierarchical organization of spatial entities is key for our challenge. Such an organization allows for a cascading representation of data, from broader scopes narrowing down to more specific layers. This representation is reminiscent of the defining order of geographical entities: regions contain provinces, which contain municipalities, and these in turn contain localities. In the georeferencing context, leveraging this hierarchical structure can lead to more precise matches. For instance, if an observatory code is associated with a specific district, the search for matches is confined to that district, enhancing both the efficiency and accuracy of the process. @fig-spatial-hierarchies represents this hierarchical arrangement, serving as a roadmap for the subsequent data matching tasks.
 
 ```{mermaid}
+
 graph TD
 
 A[Legend]
@@ -386,19 +395,21 @@ H -.- I
 C -.- G
 ```
 
-The current administrative strucure is defined as follows, regions include Districs, which include communes which include Fokontany. Fokontany refers on principles to a village, but in practice it often encompasses a series of villages or populated places. Note that communes where formalized in 1994 but their implementation took time. The concept of "communes" predates 1994, but before the decentralizatoin law they were merely a administrative representation of the local government. Regions were created in 2004.
+Madagascar's current administrative setup is straightforward: regions contain districts; districts have communes; and communes are made up of Fokontany. Though a Fokontany should in principle be a single village, it often includes multiple villages or populated areas. It's worth noting that while the idea of communes has been around for a while, they were only officially recognized in 1994. However, rolling them out took some time after 1994. Before 1994, "communes" simply described local government areas without any formal administrative status. The regions were created in 2004.
 On the ROR side, observatory refereed during the first surveys to villages. A systematic registry of the communes only started in the 2004 and 2005 round, depending on the observatories. A mention to "sites" also appeared in 2011 but was scarcely documented.
 Our strategy was to established links between the village information and populated places, and between communes.
 
 ## A Detailed walk-through
 
-As a starting point we browsed the documentation and documented, in the COD subnational data adding a field `OBS_Y_N`, with the value 1 if the municipality was reported as included into an observervatory survey (or empty otherwise), and `OBS_NUM` with the number of the corresponding observatory (or empty if not reported as surveyed). The list of observatory and corresponding surveyed municipalities is presented in the \[table X\].
+We now break down our approach to describe each subsequent step. We began by exploring the ROR documentation, and in particular the reports associated to community survey, that contain descriptions of the area surveyed by each observatory. While doing so, we updated the COD subnational administrative boundary dataset by adding a field named `OBS_Y_N`. This field was marked as '1' if the municipality was listed in an observatory survey; if not, it was left empty. Additionally, we added another field, `OBS_NUM`, which would store the observatory number. If the municipality wasn't part of any survey, this field was  left empty. The list of observatories and surveyed municipalities can be found in the @tbl-list-muni.
 
-The process followed then applied 4 subsequent geolocation phases, all of which are totally n the completeness/quality of the data obtained in the previous steps, so we follow it by
+Next, we moved on to geolocation, which took place in four stages. Each stage depended heavily on the data quality and completeness obtained from the previous ones. 
 
 ### Method 1
 
-Where we have municipality names in the corresponding field: match these names with the names of the municipalities already identified as data collection sites (the matching is segmented observatory by observatory to reduce the risk). There might be some writing variations so we use fuzzy matching, checking for the likelihood to have a valid match (and maybe enable a visual confirmation)
+This phase entailed a systematic alignment process for the municipalities. When municipality names were included in our dataset, an attempt was made to correlate them with names of municipalities identified as data collection locales. For enhanced precision, this alignment was conducted specific to each observatory. Given the potential for variance in nomenclature across sources, a fuzzy matching algorithm was employed. This method calculates the probability of two distinct names referencing the same entity. Upon identifying a probable match, we performed a visual verification for all matches and flagged the false positives to remove them.
+
+The following code segment elucidates the methodology applied:
 
 ```{r}
 # List of years
@@ -415,7 +426,7 @@ all_surveys_description <- map_df(years, function(year) {
 # Extract unique combinations and list all the years they appeared in
 unique_combinations <- all_surveys_description %>%
   group_by(j0, j42, j4) %>%
-  summarize(years = toString(year)) %>%
+  summarize(years = toString(unique(year))) %>%
   ungroup()
 
 # Harmonize the fields that contain municipality or village names
@@ -450,7 +461,7 @@ correspondence_table <- correspondence_table %>%
   mutate(method = ifelse(!is.na(matched_string), "method_1", NA_character_))
 ```
 
-We can visualize the output of this matches in a map.
+To synthesize and visually represent our matches, the identified municipalities are plotted on a map:
 
 ```{r}
 # Extract matched resuts
@@ -466,9 +477,9 @@ tm_shape(matched_spatial) +
   tm_polygons(col = "OBS_NAME")
 ```
 
-### Method 2
+### Method 2: Extracting municipality names from text in "village names"
 
-For observations that had no municipality name. Try parsing the strings in the village name field to see if they contain a municipality name of a municipality already identified within the observatory surveyed municipalities.
+For observations where the field "municipality name" was empty (all cases before 2004 and still a frequent situation afterwards), we turned our attention to the village name field. The objective was to decipher whether these village names could potentially contain a municipality's name that had been previously pinpointed during the observatory surveys. For the observations with no municipality value, we teased out the first word or segment in the village name. This extracted word then underwent a process of fuzzy matching against the roster of identified municipalities' names. However, manual verification spotted errors. Certain matches, which we labeled 'false positives', emerged as errors and were purged from the results. Once this cleansing step was concluded, we included the validated matches back into the primary correspondence table.
 
 ```{r}
 # Filter out matched municipalities and extract the first word
@@ -499,12 +510,13 @@ validated_matches2 <- potential_matches2 %>%
 # Integrate new results in correspondence table
 correspondence_table <- correspondence_table %>%
   filter(!is.na(matched_string)) %>%
-  bind_rows(validated_matches2)
+  bind_rows(validated_matches2) %>%
+  select(-first_word)
 ```
 
-### Method 3
+### Method 3: Village name fuzzy matching with populated places
 
-Now let's see if I have clo
+With some observations still devoid of a matched municipality, we initiated another processing layer. This phase saw the unmatched village names being subjected to fuzzy matching against the populated places dataset described above. We first sifted out the unmatched results from our prior analysis. Then, we augmented the 'pop_places' dataset with observatory codes for the entries that were located in communes recognized as surveyed by observatories. Next we performed another fuzzy matching, comparing the village names against the 'pop_places' names. To maintain a level of precision, we set a restrictive threshold, dismissing any match that exceeded a certain "distance" or degree of difference. But, as with the previous methods, visual verification revealed some missmatches. These 'false positives' were flagged and discarded and the remaining ones were integrated into the overarching correspondence table.
 
 ```{r}
 # Re-filter unmatched results
@@ -550,6 +562,9 @@ correspondence_table <- correspondence_table %>%
 
 For the remaining, let's try matching with other village names for which municipality has been matched.
 
+
+Even after the above measures, there remained observations that had eluded a municipality match. The subsequent strategy was to juxtapose them with other village names that had already been successfully matched to a municipality. We assembled a dataset comprising of municipality names and their paired village names, using data from previous successful matches. UThen the still-unmatched village names were run through a fuzzy matching process against the known village names. We fine-tuned the algorithm with a restrictive matching threshold. Again, some matches stood out as anomalies. Labeled as 'false positives', these were sifted out and the newly matched data was incorporated into the main correspondence table.
+
 ```{r}
 # Create a list of municipality names and village names for matched observations
 matched_villages <- correspondence_table %>%
@@ -590,23 +605,41 @@ correspondence_table <- correspondence_table %>%
 
 ## Matching villages
 
-Now we will georeference the villages.
+After successfully matching commune names with an official, normalized reference, our next goal is to align the villages as identified by the ROR with their administrative counterpart, known as Fokontany. This task presents challenges, notably because the ROR's village identifications weren't directly linked to Fokontany names, and the Fokontany names themselves have undergone changes. Additionally, variations in village naming within the ROR dataset complicate the process. Our approach involves several steps: First, we load the official COD Fokontany dataset. Next, we standardize the place names using our previously discussed `clean_string` function. Then, using the purpose-built `fuzzy_match_village` function, we assess the similarity between the village names in the ROR dataset and the Fokontany names within the same commune, specifically by calculating the Jaro-Winkler distance between the strings. We the names with the highest degree of matching. During a manual review of these results, we closely examined the matches, especially those with larger Jaro-Winkler distance. From this examination, we derived a distance of 0.2, below which the majority of matches were accurate. Notably, some matches above this threshold were deemed accurate and retained, while a small number of matches below this threshold were identified as false positives and subsequently discarded.
+
 
 ```{r}
-fuzzy_match_village <- function(target_string, dataframe, column_name, ADM3_PCODE_filter, 
-                                max_distance = 0.25) {
+# Load the ADM4 dataset, which corresponds to Fokontany
+fokontany <- st_read("../Entités administratives/OCHA_BNGRC frontières administratives/mdg_admbnda_adm4_BNGRC_OCHA_20181031.shp",
+                      quiet = TRUE) %>%
+  mutate(ADM4_clean = clean_string(ADM4_EN))
+
+# A function to perform fuzzy matching with Fokontany or populated places
+fuzzy_match_village <- function(target_string, dataframe, column_name, 
+                                ADM3_PCODE_filter, id_column, 
+                                municipality_string = NULL, max_distance = 0.4) {
+  
+  # Check if target_string has multiple words and if the first word matches the municipality_string
+  if (!is.null(municipality_string) && length(unlist(strsplit(target_string, " "))) > 1) {
+    first_word <- unlist(strsplit(target_string, " "))[1]
+    distances_municipality <- stringdist::stringdist(first_word, municipality_string, method = "jw")
+    if (min(distances_municipality, na.rm = TRUE) <= max_distance) {
+      target_string <- str_remove(target_string, paste0("^", first_word, " "))
+    }
+  }
   
   filtered_reference <- dataframe %>%
                           filter(ADM3_PCODE == ADM3_PCODE_filter) %>%
-                          select(all_of(column_name), P_PCODE, longitude, latitude)
+                          select(all_of(column_name), all_of(id_column))
   
   # If filtered_reference is empty, return NA values
   if (nrow(filtered_reference) == 0) {
-    return(list(matched_string = NA, P_PCODE = NA, geometry = NA, distance = 1))
+    return(list(matched_string = NA, ID = NA, geometry = NA, distance = 1))
   }
   
   # Use stringdist to find the closest match
-  distances <- stringdist::stringdistmatrix(target_string, filtered_reference[[column_name]], method = "jw")
+  distances <- stringdist::stringdistmatrix(
+    target_string, filtered_reference[[column_name]], method = "jw")
   
   # If there are no valid distances, set min_distance to Inf
   if(all(is.na(distances))) {
@@ -622,123 +655,226 @@ fuzzy_match_village <- function(target_string, dataframe, column_name, ADM3_PCOD
   
   # If min_distance exceeds the max_distance threshold, return NA values
   if (min_distance > max_distance) {
-    return(list(matched_string = NA, P_PCODE = NA, geometry = NA, distance = NA))
+    return(list(matched_string = NA, ID = NA, geometry = NA, 
+                distance = NA))
   }
   
   matched_row <- filtered_reference[which.min(distances), ]
   
-  return(list(matched_string2 = matched_row[[column_name]], 
-              P_PCODE = matched_row$P_PCODE, 
-              longitude = matched_row$longitude,
-              latitude = matched_row$latitude,
-              distance2 = min_distance))
+  return(list(matched_string = matched_row[[column_name]], 
+              ID = matched_row[[id_column]], 
+              distance = min_distance))
 }
+# correspondence table without municipality geometry
+correspondence_table2 <- correspondence_table %>%
+  st_drop_geometry()
 
-# Extract coordinates from pop_places
-coords <- data.frame(st_coordinates(pop_places$geometry))
-
-# Add these as columns in pop_places
-pop_places$longitude <- coords[, "X"]
-pop_places$latitude <- coords[, "Y"]
-
-
-
-# Apply the modified fuzzy match
-results_village_geom <- pmap_df(
-  list(clean_village = correspondence_table$clean_village, 
-       ADM3_PCODE = correspondence_table$ADM3_PCODE), 
-  function(clean_village, ADM3_PCODE) {
-    as.data.frame(t(fuzzy_match_village(clean_village, pop_places, "clean_pname", ADM3_PCODE)))
+# For fokontany
+results_fokontany <- pmap_df(
+  list(clean_village = correspondence_table2$clean_village, 
+       ADM3_PCODE = correspondence_table2$ADM3_PCODE, 
+       municipality_string = correspondence_table2$clean_muni),
+  function(clean_village, ADM3_PCODE, municipality_string) {
+    as.data.frame(t(fuzzy_match_village(clean_village, fokontany, 
+                                        "ADM4_clean", ADM3_PCODE, "ADM4_PCODE", municipality_string)))
   }
-)
-
+) %>%
+   unnest(cols = everything()) %>%
+  rename(ADM4_PCODE = ID, ADM4_clean = matched_string, distance2 = distance) %>%
+  st_drop_geometry() %>%
+  select(-geometry)
+ 
 # Combine the results with correspondence_table
-correspondence_table_updated <- bind_cols(correspondence_table, results_village_geom)
+correspondence_table2_updated <- bind_cols(correspondence_table2, 
+                                          results_fokontany) %>%
+  mutate(method_village = ifelse(!is.na(ADM4_PCODE), "method_5", NA_character_))
 
+
+# For a visual validation
+correspondence_table2_updated %>% 
+  arrange(desc(distance2)) %>%
+  write_xlsx("correspondence_table2_update.xlsx")
+
+# After instpecting the data, we find that a 0.2 threshold in distance is 
+# appropriate. However some valid matches above this threshold should be kept
+
+high_tolerance_valid_matches <- c(
+  "ambanja", "ambararata 2", "ambaro", "ambatoharanana", "ambatomanga", 
+  "ambazoamazava", "ambazoamirafy", "ambodibonara", "ambodimotso atsimo", 
+  "ambohidrony", "ambohimahatsinjo atsinanana", "ambongabe", "amparafaravola", 
+  "ampasy", "ampijoroa", "ampijoroan ala", "ampitana", "analambarika", 
+  "andohasoamahainty", "anjiamangirana 1", "ankazoabo anivo", "ankerereake", 
+  "ankililoaka 2", "bepako", "bevato", "erada 2", "esanta fototra", 
+  "esanta marofoty", "esanta maromainty", "feramanga atsimo", "habohabo atsimo", 
+  "habohabo avaratra", "lafiatsinanana", "madiromiongana", "manambaro 2", 
+  "manantenina", "mangabe", "mangaoka", "maritampona", "maroala", "marofoty", 
+  "marolampy", "marovantaza", "miary", "miary ankasy", "miary ankoronga", 
+  "miorimivalana", "tanambao", "tanambao 2", "tandroka andrefana", 
+  "tsarahasina", "vohilengo")
+
+# Below this threshold, a few false positives should be removed
+low_tolerance_invalid_marches <- c(
+  "AMBOHIMAHATSINJO EST", "AMBOHIMAHATSINJO-EST/CENTRE", 
+  "AMBALAKINDRESY/ANDOHARENINA", "ambazoa /ampiha", "AMBALAKINDRESY/ANDOHARENA", 
+  "ANKAZOABO SUD/ALAMBARIKE", "ANKARINEZAKA/NAMARINA", "AMBALA/ANDRANOLAVA", 
+  "AMBALAKINDRESY/ANDRANOLAVA", "AMBALAKINDRESY/ANDRANOLAVA")
+
+correspondence_table3 <- correspondence_table2_updated %>%
+  mutate(
+    across(c(ADM4_clean, ADM4_PCODE, distance2, method_village), 
+           ~ case_when(
+             (distance2 > 0.2 & !ADM4_clean %in% high_tolerance_valid_matches) |
+             ADM4_clean %in% low_tolerance_invalid_marches ~ NA,
+             TRUE ~ .)))
 ```
 
 ## Validating the Quality of Georeferenced Data
 
+To ensure the robustness and validity of our georeferenced data, we employ a multi-tiered validation approach that hinges on quantitative metrics and qualitative consistency checks.
+
 ### Quantitative metrics
 
-We assess the unique observations that could be matched at each steps.
+We first look at the distribution of the unique observations that were successfully matched during the various stages of the georeferencing process. 
 
 ```{r}
-correspondence_table %>%
-  mutate(`Geolocated municipalities at step 1` = 
-           ifelse(is.na(method), "Unmatched", "Matched")) %>%
-  group_by(`Geolocated municipalities at step 1`, is.na(j42)) %>% 
-  summarise(N = n()) %>%
-  mutate(Percentage = (N / sum(N) * 100),
-         Percentage = round(Percentage, 1)) %>%
-  gt()
+#| label: tbl-stats-matching
+#| tbl-cap: "Summary of commune and village matchings"
+
+# Re-format modality labels  
+matching_tbl <- correspondence_table3 %>%
+  mutate(method = case_when(
+    method == "method_1" ~ "Method 1",
+    method == "method_2" ~ "Method 2",
+    method == "method_3" ~ "Method 3",
+    method == "method_4" ~ "Method 4",
+    is.na(method) ~ "Unmatched communes"),
+    method_village = case_when(
+      method_village == "method_5" ~ "Matched",
+      is.na(method_village) ~ "Unmatched")) 
+
+
+# Construct a two-way table
+tbl_cross(data = matching_tbl,
+          row = method,
+          col = method_village,
+          percent = "cell",
+          label = list(method ~ "Matched communes",
+                       method_village ~ "Village matched with Fokontany"))
+
 ```
 
 ### Consistency check with documentation
 
-Check that we have villages in all the municipalities
+To ensure the comprehensiveness of our georeferencing process, we summarize the list of unique matches for villages from all the municipalities in the final dataset. This check will help ensure there are no glaring gaps in the matched data.
 
-Comparison with the ROR registries
+```{r}
+#| label: tbl-list-muni
+#| tbl-cap: "List of fokontany per commune and observatory"
+
+fokontany_list <- correspondence_table3 %>%
+  mutate(j0 = as.numeric(j0)) %>%
+  left_join(observatory_names, by = c("j0" = "code")) %>%
+  rename(OBS_NAME = name) %>%
+  left_join(select(st_drop_geometry(fokontany), ADM4_PCODE, ADM4_EN),
+            by = "ADM4_PCODE") %>%
+  group_by(OBS_NAME, ADM3_EN) %>%
+  summarize(ADM4_EN = list(unique(if_else(is.na(ADM4_EN), "Unknown", ADM4_EN)))) %>%
+  ungroup() %>%
+  mutate(ADM4_EN = map_chr(ADM4_EN, ~ str_c(.x, collapse = ", ")))
+
+fokontany_list %>%
+  gt() %>%
+  # Set column labels
+  cols_label(
+    OBS_NAME = "Observatory Name",
+    ADM3_EN = "Commune Name",
+    ADM4_EN = "Fokontany Names") %>%
+  # Add a title
+  tab_header(title = "Summary of Fokontany List",
+             subtitle = "Breakdown by Observatory and Commune") 
+```
+
+We compare this with the ROR documentation to assess which villages might have been omitted by our algorithm. 
 
 ### Visual exploration and avenues for continuous corrections
 
-Visualizing the data
+We visually explore the the georeferenced data to observe its spatial distribution and spot eventual anomalies or clustering patterns that might not be immediately obvious from numerical summaries. The visualization below maps out our matched municipalities alongside villages. Discrepancies or clusters may indicate a need for further refinement or correction. 
 
 ```{r}
-# Extract matched results
-matched_results <- unique(correspondence_table$ADM3_PCODE) %>%
-  na.omit()
+#| label: fig-map-final
+#| fig-cap: "Map of the surveyed communes and fokonany in protected areas vicinity"
 
-# Keep municipalities in those
-matched_spatial <- obs_communes %>%
-  filter(ADM3_PCODE %in% matched_results)
 
-#############################################################################
-# Big problem with spatial coordianates TO SOLVE LATER
-# Handle NULL values by assigning them NA
-correspondence_table_updated$longitude[sapply(correspondence_table_updated$longitude, is.null)] <- NA
-correspondence_table_updated$latitude[sapply(correspondence_table_updated$latitude, is.null)] <- NA
+commmune_pcode_years <- correspondence_table3 %>%
+  # Split and unnest the years
+  mutate(years = str_split(years, ", ")) %>%
+  unnest(years) %>%
+  # Convert years to numeric for proper sorting
+  mutate(years = as.numeric(years)) %>%
+  # Group by ADM3_PCODE and extract unique, sorted years
+  group_by(ADM3_PCODE) %>%
+  summarize(years = list(unique(years))) %>%
+  ungroup() %>%
+  # Sort and collapse the years
+  mutate(years = map_chr(years, ~ paste(sort(.x), collapse = ", ")))
 
-# Convert the remaining list items to numeric
-correspondence_table_updated$longitude <- sapply(correspondence_table_updated$longitude, function(x) {
-  if (is.list(x) && !is.null(x[[1]])) {
-    return(as.numeric(x[[1]]))
-  } else {
-    return(as.numeric(x))
-  }
-})
+fokontany_pcode_years <- correspondence_table3 %>%
+  # Split and unnest the years
+  mutate(years = str_split(years, ", ")) %>%
+  unnest(years) %>%
+  # Convert years to numeric for proper sorting
+  mutate(years = as.numeric(years)) %>%
+  # Group by ADM3_PCODE and extract unique, sorted years
+  group_by(ADM4_PCODE) %>%
+  summarize(years = list(unique(years))) %>%
+  ungroup() %>%
+  # Sort and collapse the years
+  mutate(years = map_chr(years, ~ paste(sort(.x), collapse = ", ")))
 
-correspondence_table_updated$latitude <- sapply(correspondence_table_updated$latitude, function(x) {
-  if (is.list(x) && !is.null(x[[1]])) {
-    return(as.numeric(x[[1]]))
-  } else {
-    return(as.numeric(x))
-  }
-})
-# Filter rows where both longitude and latitude are not NA
-correspondence_table_updated <- correspondence_table_updated[!is.na(correspondence_table_updated$longitude) & 
-                                                            !is.na(correspondence_table_updated$latitude), ]
-# Convert to sf object
-correspondence_sf <- st_as_sf(correspondence_table_updated, coords = c("longitude", "latitude"), crs = 4326)
-#########################################################################
+selected_communes <- commmune_pcode_years %>%
+  filter(!is.na(ADM3_PCODE)) %>%
+  left_join(obs_communes, by = "ADM3_PCODE") %>%
+  st_sf()
+
+selected_fokontany <- fokontany_pcode_years %>%
+  filter(!is.na(ADM4_PCODE)) %>%
+  left_join(fokontany, by = "ADM4_PCODE") %>%
+  st_sf()  %>%
+  mutate(label = "Surveyed______")
 
 Vahatra <- st_read("../Aires protégées/Vahatra/Shapefiles/AP_Vahatra.shp", 
-                   quiet = TRUE)
+                   quiet = TRUE) %>%
+  st_make_valid() %>%
+  mutate(label = "Protected area__")
 
-# Plot
+
 tmap_mode("view")
-tm_shape(matched_spatial) +
-  tm_polygons(col = "OBS_NAME") +
-  tm_shape(correspondence_sf) + 
-  tm_dots(alpha = 0.5, size = 0.1) +
-  tm_shape(Vahatra) +
-  tm_polygons(col = "green", alpha = 0.3) +
-  tmap_options(check.and.fix = TRUE)
-
+tm_shape(selected_communes) + 
+  tm_fill(col = "OBS_NAME", palette = "Set1", title = "Observatory",
+          id = "ADM3_EN",
+          popup.vars = c("Data collection years"  = "years",
+                         "District" = "ADM2_EN",
+                         "Region" = "ADM1_EN")) +
+  tm_shape(selected_fokontany) + 
+  tm_fill(col = "label", palette = c("black"), alpha = 0.6, title = "Fokontany", 
+          id = "ADM4_EN",
+          popup.vars = c("Data collection years"  = "years",
+                         "Commune" = "ADM3_EN",
+                         "District" = "ADM2_EN",
+                         "Region" = "ADM1_EN")) +
+  tm_shape(Vahatra) + 
+  tm_fill(col = "label", palette = c("darkgreen"), alpha = 0.4,
+          popup.vars = c("Year creation" = "an_crtn",
+                         "IUCN category" = "cat_icn",
+                         "Manager" = "gest_1",
+                         "Manager 2" = "gest_2")) 
 ```
-
-Addressing and Rectifying Discrepancies
 
 ## Conclusion
 
-Key Findings and Takeaways Recommendations for Further Improvement in Data Georeferencing
+Given the variability in location labels recorded in the ROR data, we emphasized standardizing and aligning toponyms. We introduced the clean_string function to unify place names, addressing variances in language, letter casing, and other descriptors. Utilizing fuzzy matching, we connected similar text strings, using the Levenshtein distance as a benchmark. To heighten accuracy, a hierarchical data matching strategy was applied, reflecting the inherent structure of geographical units, where regions envelop districts, which further consist of municipalities and localities. The COD data, curated by BNGRC and OCHA, was our reference point for these matches. Various techniques, including hierarchical fuzzy matching and visual checks, were employed.
+
+As a result, 98% of commune name variations in the dataset matched with an official commune, and 73% of village name variations correlated with a fokontany. The outcomes are consistent with ROR's internal documentation, and the spatial representations can be further inspected for validation. Future corrections and enhancements are anticipated, and our system, leveraging Quarto notebook and reproducible R code, is poised to facilitate these refinements.
+
+ROR began its data collection at a time when geolocation best practices weren't as evolved as they are today. Should more survey rounds be conducted in the future, the intricate georeferencing process demonstrated here should serve both as a cautionary tale and a guide on optimizing data registration (for instance, using PCODES). We're optimistic that refining the georeferencing of past ROR data, as presented in this work, will amplify the data's utility for both research and policy decisions.
+
