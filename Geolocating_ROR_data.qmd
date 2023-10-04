@@ -42,6 +42,7 @@ library(writexl)      # Write data frames to Excel format
 library(gt)           # for nicely formatted tables
 library(cowplot)      # to combine plots
 library(gtsummary)    # to produce nice summary tables
+library(janitor)      # to simply add rowsums
 ```
 
 ## Revisiting the Rural Observatories (ROR) of Madagascar
@@ -222,16 +223,17 @@ variable_dictionary <- all_vars %>%
   arrange(year) %>%  
   summarise(
     variable_label = first(variable_label[variable_label != "NA"] %||% "NA"),
-    years_present = list(unique(year))
-  ) %>%
+    years_present = list(unique(year))) %>%
   ungroup() %>%
-  mutate(years_present = map_chr(years_present, ~paste(.x, collapse = ",")))
+  mutate(years_present = map_chr(years_present, ~ paste(.x, collapse = ",")))
 
 # Write the variable dictionary to an Excel file
 write_xlsx(variable_dictionary, "ROR_Variable_Dictionary.xlsx")
 ```
 
-The code block above creates a data dictionnary, which you can download by clicking [on this link](ROR_Variable_Dictionary.xlsx).
+The code block above creates a data dictionnary, which you can download by clicking [on this link](https://raw.githubusercontent.com/fBedecarrats/ROR/main/ROR_Variable_Dictionary.xlsx
+).
+
 
 ### Administrative boundaries
 
@@ -426,7 +428,8 @@ all_surveys_description <- map_df(years, function(year) {
 # Extract unique combinations and list all the years they appeared in
 unique_combinations <- all_surveys_description %>%
   group_by(j0, j42, j4) %>%
-  summarize(years = toString(unique(year))) %>%
+  summarize(years = toString(unique(year)),
+            obs_count = n()) %>%
   ungroup()
 
 # Harmonize the fields that contain municipality or village names
@@ -738,7 +741,7 @@ We first look at the distribution of the unique observations that were successfu
 
 ```{r}
 #| label: tbl-stats-matching
-#| tbl-cap: "Summary of commune and village matchings"
+#| tbl-cap: "Number of ROR observation which commune and village were matched"
 
 # Re-format modality labels  
 matching_tbl <- correspondence_table3 %>%
@@ -749,19 +752,51 @@ matching_tbl <- correspondence_table3 %>%
     method == "method_4" ~ "Method 4",
     is.na(method) ~ "Unmatched communes"),
     method_village = case_when(
-      method_village == "method_5" ~ "Matched",
-      is.na(method_village) ~ "Unmatched")) 
+      method_village == "method_5" ~ "Matched villages",
+      is.na(method_village) ~ "Unmatched villages"))
+
+summarized_data <- matching_tbl %>%
+  group_by(method, method_village) %>%
+  summarize(total_obs = sum(obs_count, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(percent_obs = total_obs/sum(total_obs))
+
+count_tbl <- summarized_data %>%
+  select(method, method_village, total_obs) %>%
+  pivot_wider(names_from = method_village, values_from = total_obs, 
+              values_fill = 0) %>%
+  rowwise() %>%
+  mutate(Total = sum(c(`Matched villages`, `Unmatched villages`))) %>%
+  ungroup()  %>%
+  adorn_totals("row")
+
+percent_tbl <- summarized_data %>%
+  select(method, method_village, percent_obs) %>%
+  pivot_wider(names_from = method_village, values_from = percent_obs, 
+              values_fill = 0) %>%
+  rowwise() %>%
+  mutate(`Total (%)` = sum(c(`Matched villages`, `Unmatched villages`))) %>%
+  ungroup() %>%
+  rename(`Matched (%)` = `Matched villages`, 
+         `Unmatched (%)` = `Unmatched villages`) %>%
+  mutate(across(where(is.numeric), ~ round(.x * 100, 2))) %>%
+  adorn_totals("row")
 
 
-# Construct a two-way table
-tbl_cross(data = matching_tbl,
-          row = method,
-          col = method_village,
-          percent = "cell",
-          label = list(method ~ "Matched communes",
-                       method_village ~ "Village matched with Fokontany"))
+summarized_data <- count_tbl %>%
+  left_join(percent_tbl, by = "method") %>%
+  relocate(method, `Matched villages`, `Matched (%)`, 
+           `Unmatched villages`, `Unmatched (%)`,
+           Total, `Total (%)`) %>%
+  rename(`Commune matching method` = method)
 
+gt(summarized_data)  %>%
+  # Add a title
+  tab_header(title = "Result of matching process",
+             subtitle = "Number of survey observation per method") 
 ```
+
+
 
 ### Consistency check with documentation
 
