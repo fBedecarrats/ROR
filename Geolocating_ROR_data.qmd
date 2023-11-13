@@ -16,6 +16,7 @@ execute:
 editor: visual
 editor_options: 
   chunk_output_type: console
+bibliography: references.bib
 ---
 
 > **Note:** To pilot-test our georeferencing approach, we tested it with 8 observatories (out of the 26 of the rural observatory network). We prioritized the observatories that were in the vicinity of protected areas, as it exemplifies the usefulness of our approach. This procedure will soon be extended to the 18 other observatories.
@@ -47,10 +48,9 @@ library(janitor)      # to simply add rowsums
 
 ## Revisiting the Rural Observatories (ROR) of Madagascar
 
-The Rural Observatory Network (ROR) was established as part of the Madio project (1994-1999), a technical assistance program of the IRD to the national statistical institute (INSTAT) of Madagascar, as an innovative mechanism for monitoring and analyzing the country's agricultural sector. This initiative arose from the urgent need to compile statistics on the agricultural industry due to the breakdown of the existing statistical system following the socialist era and political turmoil in the country. 
+The Rural Observatory Network (ROR) was established as part of the Madio project (1994-1999), a technical assistance program of the IRD to the national statistical institute (INSTAT) of Madagascar, as an innovative mechanism for monitoring and analyzing the country's agricultural sector. This initiative arose from the urgent need to compile statistics on the agricultural industry due to the breakdown of the existing statistical system following the socialist era and political turmoil in the country.
 
-Four initial observatories were established in 1995, each representing a different set of agricultural challenges in the country's diverse ecosystems. From 1995 to 2015, 22 other observatories were created, and existing were abandoned (see @fig-hist-ror). The ROR were supported by a variety of donors and NGOs during this period: European union, AFD, World Bank, GTZ, Swiss cooperation, Care and Rio Tinto. The selection of observation sites was based on a combination of criteria, including agroclimatic areas, dominant production systems, population density, accessibility, and the presence of support structures and development projects. These observatories aimed to provide insights into the dynamics of Malagasy agriculture, covering a range of issues such as isolated coastal communities of fishermen and livestock farmers, the impact of trade liberalization on vanilla producers, family smallholdings in the central plateau, and the restructuring of large irrigated rice-growing areas. 
-
+Four initial observatories were established in 1995, each representing a different set of agricultural challenges in the country's diverse ecosystems. From 1995 to 2015, 22 other observatories were created, and existing were abandoned (see @fig-hist-ror). The ROR were supported by a variety of donors and NGOs during this period: European union, AFD, World Bank, GTZ, Swiss cooperation, Care and Rio Tinto. The selection of observation sites was based on a combination of criteria, including agroclimatic areas, dominant production systems, population density, accessibility, and the presence of support structures and development projects. These observatories aimed to provide insights into the dynamics of Malagasy agriculture, covering a range of issues such as isolated coastal communities of fishermen and livestock farmers, the impact of trade liberalization on vanilla producers, family smallholdings in the central plateau, and the restructuring of large irrigated rice-growing areas.
 
 ```{r}
 #| label: fig-hist-ror
@@ -188,7 +188,7 @@ P-codes act as reliable geographic identifiers, eliminating errors arising from 
 
 The ROR survey data is organized in a collection of year-specfic folders ranging from 1995 to 2015. Each yearly folder houses multiple .dta files (Stata data format) -- about 85 per year -- with diverse filenames such as "res_as.dta" and "res_bp.dta". Although there's an element of harmonization achieved, especially regarding certain variables and household identifiers, the data varies in terms of geographical granularity. Initial years primarily provide a singular field denoting the village name. As the years progress, this evolves to include a municipality name, and in the latter years, an additional "site" name occasionally appears. A comprehensive overview of the observations can be gleaned from the "res_deb.dta" files within each year.
 
-```{r}
+```{r var_dict}
 # Function to extract variable info for a given year and file
 extract_variable_info <- function(year, file) {
   
@@ -231,9 +231,92 @@ variable_dictionary <- all_vars %>%
 write_xlsx(variable_dictionary, "ROR_Variable_Dictionary.xlsx")
 ```
 
-The code block above creates a data dictionnary, which you can download by clicking [on this link](https://raw.githubusercontent.com/fBedecarrats/ROR/main/ROR_Variable_Dictionary.xlsx
-).
+The code block above creates a data dictionnary, which you can download by clicking [on this link](https://raw.githubusercontent.com/fBedecarrats/ROR/main/ROR_Variable_Dictionary.xlsx).
 
+### Panel attrition
+
+To assess the integrity of the panel data, we assess the attrition that characterizes it. That is, for each survey reiteration, we compute the percentage of household identified in the previous round that are still present in the subsequent round. This produces the following result:
+
+```{r attrition}
+#| label: fig-attrition-ror
+#| fig-cap: "Attrition rate of ROR panels per observatory and survey round"
+
+# Function to read and process each file
+read_and_process <- function(year) {
+  file_path <- file.path("Données ROR/enter", as.character(year), "res_deb.dta")
+  data <- read_dta(file_path) %>%
+    select(j0, j5) %>%
+    mutate(year = year)
+  return(data)
+}
+
+# Use map to read and process files, then combine with bind_rows
+consolidated_data <- map_dfr(years, read_and_process)
+
+# Remove duplicates and create the hh_all table
+hh_all <- consolidated_data %>%
+  distinct(j0, j5, year, .keep_all = TRUE) %>%
+  arrange(j0, j5)
+
+# Creating a presence indicator
+hh_presence <- hh_all %>%
+  group_by(j0, j5) %>%
+  mutate(presence = list(year)) %>%
+  ungroup() %>%
+  distinct(j0, j5, year, .keep_all = TRUE) %>%
+  unnest(presence)
+
+# Function to calculate attrition rate
+calculate_attrition <- function(hh_current, hh_previous) {
+  if (length(hh_previous) == 0) {
+    return(NA)  # No attrition rate if there were no households in the previous year
+  }
+  attrition_rate <- length(intersect(hh_current, hh_previous)) / length(hh_previous)
+  return(attrition_rate * 100)  # Convert to percentage
+}
+
+# Preparing data for attrition rate calculation
+attrition_data <- hh_presence %>%
+  group_by(j0, year) %>%
+  summarise(households = list(j5), .groups = 'drop') %>%
+  group_by(j0) %>%
+  arrange(year) %>%
+  mutate(households_previous = lag(households))
+
+# Calculate attrition rates
+attrition_rates <- attrition_data %>%
+  rowwise() %>%
+  mutate(attrition_rate = calculate_attrition(households, households_previous),
+         year = as.numeric(year)) %>%
+  select(j0, year, attrition_rate)
+# Pivot the data to have years as columns and observatory numbers as rows
+attrition_rates <- attrition_rates %>%
+  left_join(locations %>%
+              mutate(observatory_with_num = paste0(seq_num, ". ", name),
+                     observatory_with_num = fct_reorder(observatory_with_num, 
+                                                        latitude)) %>%
+              select(code, name, observatory_with_num), 
+            by = c("j0" = "code")) %>%
+  drop_na(name)
+
+
+ggplot(attrition_rates, 
+       aes(x = year, y = observatory_with_num, 
+           fill = attrition_rate)) +
+  geom_tile() +  # Create the heatmap tiles
+  geom_text(aes(label = ifelse(is.na(attrition_rate), "", 
+                               round(attrition_rate))), 
+            color = "black", size = 3) +
+  scale_fill_gradient(low = "green", high = "red", na.value = "grey", name = "Attrition Rate (%)") +
+  theme_minimal() +
+  labs(x = "Year",
+       y = "Observatory (j0)") +
+  theme_minimal() +
+  labs(y = NULL, x = NULL) +
+  theme(axis.text.y = element_text(size = 8)) 
+```
+
+As we can see in the graph, attrition in particularly stron gin certain observatories. Marovoay, Toliara littoral seem to be the observatories were the panels were best maintained over time. Attrition on ROR data has been studied @gubert2008; @vaillant2013.
 
 ### Administrative boundaries
 
@@ -243,7 +326,7 @@ The "Madagascar Subnational Administrative Boundaries" dataset is sourced from t
 
 The "Madagascar Populated Places" dataset is also part of the Common Operational Datasets (CODs). This dataset encompasses populated place points for Madagascar. The data has been sourced from the National Geospatial-Intelligence Agency and provided by the University of Georgia - ITOS. Further, the Geographic Information Support Team (GIST) has taken up the role of distributor, with the data being published on 2007-03-07. UN OCHA ROSA has enhanced the dataset by adding P-codes and administrative boundary names, which are based on the BNGRC (National Disaster Management Office) data. The dataset geolocates 28184 populated places with their toponyms (names), codes related to various administrative levels such as fokontany, commune, district, and region, and their spatial coordinates.
 
-```{r}
+```{r load_data}
 # Load datasets
 ROR_surveys_2007 <- read_dta("Données ROR/enter/2007/res_deb.dta")
 observatory_names <- read_xlsx("Observatory_names.xlsx")
@@ -263,7 +346,7 @@ pop_places <- st_read(
 
 The treatment of toponyms presents a unique challenge, especially when these names are captured from varied sources. In the dataset, these names can vary due to differences in languages, case sensitivity, and the inclusion of additional descriptive terms. To address this, the `clean_string` function was developed. This function begins by converting all strings to lowercase, ensuring that subsequent comparisons are not sensitive to case variations. Next, to create a uniform standard, all non-alphanumeric characters are removed, retaining only spaces and the alphanumeric content. Common qualifiers in toponyms, such as "centre", "haut" (high) or "bas" (low), which are not used consistently across records, are also removed. Given the bilingual nature of the dataset, with entries potentially in both Malagasy and French, the function translates cardinal points to the Malagasy language to ensure uniformity. Lastly, certain locales with multiple names, such as "Fort Dauphin", also known as "Taolagnaro", "Tolagnaro" or "Tolanaro", are standardized to a single term, "Tolanaro", to eliminate potential disparities. We also address instances of Roman numerals from I to VI, converting them to their Arabic numeral counterparts, ensuring consistent representation across records.
 
-```{r}
+```{r clean_function}
 clean_string <- function(x){
   x %>%
     tolower() %>% # Convert to lowercase
@@ -292,10 +375,9 @@ clean_string <- function(x){
 
 ### Fuzzy matching
 
-By default, statistical softwares and computing language match text by pairing only identical strings. Exact string matching is inappropriate in our context, where location data entry was subject to human errors like typographical mistakes or minor variations in spelling. To avoid this rigidity, fuzzy matching is employed. This approach gauges the degree of similarity between two strings, bypassing the need for an exact character-to-character match. The principle metric adopted for this is the "Levenshtein distance", which quantifies the minimum number of single-character edits required to change one string into another. The `fuzzy_match` function encapsulates this approach. The function initiates the process by filtering the reference list of encontered toponyms based on a given observatory code, which considerably narrows down potential matches. Then, using the Jaro-Winkler distance metric — a variant of the Levenshtein distance particularly suited for shorter strings — the function computes the similarity between the target string and entries in the filtered reference. To ensure that only relevant matches are acknowledged, a threshold, termed max_distance, is set. Matches that exceed this threshold are disregarded. For those that pass this validation, the function then extracts the pertinent details of the matched row from the reference dataframe.
+By default, statistical softwares and computing language match text by pairing only identical strings. Exact string matching is inappropriate in our context, where location data entry was subject to human errors like typographical mistakes or minor variations in spelling. To avoid this rigidity, fuzzy matching is employed. This approach gauges the degree of similarity between two strings, bypassing the need for an exact character-to-character match. The principle metric adopted for this is the "Levenshtein distance", which quantifies the minimum number of single-character edits required to change one string into another. The `fuzzy_match` function encapsulates this approach. The function initiates the process by filtering the reference list of encontered toponyms based on a given observatory code, which considerably narrows down potential matches. Then, using the Jaro-Winkler distance metric --- a variant of the Levenshtein distance particularly suited for shorter strings --- the function computes the similarity between the target string and entries in the filtered reference. To ensure that only relevant matches are acknowledged, a threshold, termed max_distance, is set. Matches that exceed this threshold are disregarded. For those that pass this validation, the function then extracts the pertinent details of the matched row from the reference dataframe.
 
-
-```{r}
+```{r fuzzy_matching}
 fuzzy_match <- function(target_string, dataframe, column_name, observatory_code, 
                         max_distance = 0.25) {
   # Filter the dataframe based on observatory_code
@@ -355,6 +437,7 @@ Z[ ]
 W -->|Pre-definede hierarchy| X
 Y -.-|Implemented matching|Z
 ```
+
 ```{mermaid}
 %%| label: fig-spatial-hierarchies
 %%| fig-cap: Spatial entities pre-defined relationship and matching
@@ -397,15 +480,13 @@ H -.- I
 C -.- G
 ```
 
-Madagascar's current administrative setup is straightforward: regions contain districts; districts have communes; and communes are made up of Fokontany. Though a Fokontany should in principle be a single village, it often includes multiple villages or populated areas. It's worth noting that while the idea of communes has been around for a while, they were only officially recognized in 1994. However, rolling them out took some time after 1994. Before 1994, "communes" simply described local government areas without any formal administrative status. The regions were created in 2004.
-On the ROR side, observatory refereed during the first surveys to villages. A systematic registry of the communes only started in the 2004 and 2005 round, depending on the observatories. A mention to "sites" also appeared in 2011 but was scarcely documented.
-Our strategy was to established links between the village information and populated places, and between communes.
+Madagascar's current administrative setup is straightforward: regions contain districts; districts have communes; and communes are made up of Fokontany. Though a Fokontany should in principle be a single village, it often includes multiple villages or populated areas. It's worth noting that while the idea of communes has been around for a while, they were only officially recognized in 1994. However, rolling them out took some time after 1994. Before 1994, "communes" simply described local government areas without any formal administrative status. The regions were created in 2004. On the ROR side, observatory refereed during the first surveys to villages. A systematic registry of the communes only started in the 2004 and 2005 round, depending on the observatories. A mention to "sites" also appeared in 2011 but was scarcely documented. Our strategy was to established links between the village information and populated places, and between communes.
 
 ## A Detailed walk-through
 
-We now break down our approach to describe each subsequent step. We began by exploring the ROR documentation, and in particular the reports associated to community survey, that contain descriptions of the area surveyed by each observatory. While doing so, we updated the COD subnational administrative boundary dataset by adding a field named `OBS_Y_N`. This field was marked as '1' if the municipality was listed in an observatory survey; if not, it was left empty. Additionally, we added another field, `OBS_NUM`, which would store the observatory number. If the municipality wasn't part of any survey, this field was  left empty. The list of observatories and surveyed municipalities can be found in the @tbl-list-muni.
+We now break down our approach to describe each subsequent step. We began by exploring the ROR documentation, and in particular the reports associated to community survey, that contain descriptions of the area surveyed by each observatory. While doing so, we updated the COD subnational administrative boundary dataset by adding a field named `OBS_Y_N`. This field was marked as '1' if the municipality was listed in an observatory survey; if not, it was left empty. Additionally, we added another field, `OBS_NUM`, which would store the observatory number. If the municipality wasn't part of any survey, this field was left empty. The list of observatories and surveyed municipalities can be found in the @tbl-list-muni.
 
-Next, we moved on to geolocation, which took place in four stages. Each stage depended heavily on the data quality and completeness obtained from the previous ones. 
+Next, we moved on to geolocation, which took place in four stages. Each stage depended heavily on the data quality and completeness obtained from the previous ones.
 
 ### Method 1
 
@@ -413,7 +494,7 @@ This phase entailed a systematic alignment process for the municipalities. When 
 
 The following code segment elucidates the methodology applied:
 
-```{r}
+```{r method_1}
 # List of years
 years <- 1995:2014
 
@@ -466,7 +547,7 @@ correspondence_table <- correspondence_table %>%
 
 To synthesize and visually represent our matches, the identified municipalities are plotted on a map:
 
-```{r}
+```{r sum_method_1}
 # Extract matched resuts
 matched_results <- unique(correspondence_table$ADM3_PCODE) %>%
   na.omit()
@@ -565,7 +646,6 @@ correspondence_table <- correspondence_table %>%
 
 For the remaining, let's try matching with other village names for which municipality has been matched.
 
-
 Even after the above measures, there remained observations that had eluded a municipality match. The subsequent strategy was to juxtapose them with other village names that had already been successfully matched to a municipality. We assembled a dataset comprising of municipality names and their paired village names, using data from previous successful matches. UThen the still-unmatched village names were run through a fuzzy matching process against the known village names. We fine-tuned the algorithm with a restrictive matching threshold. Again, some matches stood out as anomalies. Labeled as 'false positives', these were sifted out and the newly matched data was incorporated into the main correspondence table.
 
 ```{r}
@@ -609,7 +689,6 @@ correspondence_table <- correspondence_table %>%
 ## Matching villages
 
 After successfully matching commune names with an official, normalized reference, our next goal is to align the villages as identified by the ROR with their administrative counterpart, known as Fokontany. This task presents challenges, notably because the ROR's village identifications weren't directly linked to Fokontany names, and the Fokontany names themselves have undergone changes. Additionally, variations in village naming within the ROR dataset complicate the process. Our approach involves several steps: First, we load the official COD Fokontany dataset. Next, we standardize the place names using our previously discussed `clean_string` function. Then, using the purpose-built `fuzzy_match_village` function, we assess the similarity between the village names in the ROR dataset and the Fokontany names within the same commune, specifically by calculating the Jaro-Winkler distance between the strings. We the names with the highest degree of matching. During a manual review of these results, we closely examined the matches, especially those with larger Jaro-Winkler distance. From this examination, we derived a distance of 0.2, below which the majority of matches were accurate. Notably, some matches above this threshold were deemed accurate and retained, while a small number of matches below this threshold were identified as false positives and subsequently discarded.
-
 
 ```{r}
 # Load the ADM4 dataset, which corresponds to Fokontany
@@ -737,7 +816,7 @@ To ensure the robustness and validity of our georeferenced data, we employ a mul
 
 ### Quantitative metrics
 
-We first look at the distribution of the unique observations that were successfully matched during the various stages of the georeferencing process. 
+We first look at the distribution of the unique observations that were successfully matched during the various stages of the georeferencing process.
 
 ```{r}
 #| label: tbl-stats-matching
@@ -796,8 +875,6 @@ gt(summarized_data)  %>%
              subtitle = "Number of survey observation per method") 
 ```
 
-
-
 ### Consistency check with documentation
 
 To ensure the comprehensiveness of our georeferencing process, we summarize the list of unique matches for villages from all the municipalities in the final dataset. This check will help ensure there are no glaring gaps in the matched data.
@@ -829,11 +906,11 @@ fokontany_list %>%
              subtitle = "Breakdown by Observatory and Commune") 
 ```
 
-We compare this with the ROR documentation to assess which villages might have been omitted by our algorithm. 
+We compare this with the ROR documentation to assess which villages might have been omitted by our algorithm.
 
 ### Visual exploration and avenues for continuous corrections
 
-We visually explore the the georeferenced data to observe its spatial distribution and spot eventual anomalies or clustering patterns that might not be immediately obvious from numerical summaries. The visualization below maps out our matched municipalities alongside villages. Discrepancies or clusters may indicate a need for further refinement or correction. 
+We visually explore the the georeferenced data to observe its spatial distribution and spot eventual anomalies or clustering patterns that might not be immediately obvious from numerical summaries. The visualization below maps out our matched municipalities alongside villages. Discrepancies or clusters may indicate a need for further refinement or correction.
 
 ```{r}
 #| label: fig-map-final
@@ -912,4 +989,3 @@ Given the variability in location labels recorded in the ROR data, we emphasized
 As a result, 98% of commune name variations in the dataset matched with an official commune, and 73% of village name variations correlated with a fokontany. The outcomes are consistent with ROR's internal documentation, and the spatial representations can be further inspected for validation. Future corrections and enhancements are anticipated, and our system, leveraging Quarto notebook and reproducible R code, is poised to facilitate these refinements.
 
 ROR began its data collection at a time when geolocation best practices weren't as evolved as they are today. Should more survey rounds be conducted in the future, the intricate georeferencing process demonstrated here should serve both as a cautionary tale and a guide on optimizing data registration (for instance, using PCODES). We're optimistic that refining the georeferencing of past ROR data, as presented in this work, will amplify the data's utility for both research and policy decisions.
-
