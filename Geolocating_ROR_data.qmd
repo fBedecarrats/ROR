@@ -242,8 +242,6 @@ To assess the integrity of the panel data, we assess the attrition that characte
 #| fig-cap: "Attrition rate of ROR panels per observatory and survey round"
 
 # Function to read and process each file
-# NB : j5 codes have been modified in 1996
-# so we need to replace the ones from 1995
 read_and_process <- function(year) {
   file_path <- file.path("Données ROR/enter", as.character(year), "res_deb.dta")
   data <- read_dta(file_path) %>%
@@ -253,11 +251,30 @@ read_and_process <- function(year) {
 }
 
 # Use map to read and process files, then combine with bind_rows
-consolidated_data <- map_dfr(years, read_and_process)
+consolidated_data <- map_dfr(years, read_and_process) %>%
+  mutate(year = as.numeric(year))
+
+# NB : j5 codes have been modified in 1996
+# so we need to replace the ones from 1995
+hh_96 <- read_dta("Données ROR/enter/1996/res_deb.dta") %>%
+  select(j0, year, j5_96 = j5, j_1995, j12b) %>%
+  filter(j_1995 == 1) %>%
+  select(-j_1995) %>%
+  mutate(year = 1995) %>%
+  distinct(j12b, .keep_all = TRUE)
+
+consolidated_data <- consolidated_data %>%
+  left_join(hh_96, by = c("j0", "year", "j5" = "j12b")) %>%
+  mutate(j5 = ifelse(year == 1995 & !is.na(j5_96), j5_96, j5)) %>%
+  select(j0, j5, year)
+
+# We need also to discard the 2004 survey in Marovoay that is very particular
+# cf. Vaillant 2013.
+consolidated_data <- consolidated_data %>%
+  filter(!(j0 == 3 & year == 2005))
 
 # Remove duplicates and create the hh_all table
 hh_all <- consolidated_data %>%
-  mutate(year = as.numeric(year)) %>%
   distinct(j0, j5, year, .keep_all = TRUE) %>%
   arrange(j0, j5)
 
@@ -295,6 +312,12 @@ attrition_rates <- attrition_rates_detail  %>%
             by = c("j0" = "code")) %>%
   drop_na(name)
 
+average_wo_outliers <- attrition_rates %>%
+  filter(attrition_rate < 80) %>%
+  summarise(mean = mean(attrition_rate))
+
+average_wo_outliers <- round(average_wo_outliers$mean, 1)
+compound_avg_10y <- round((1-(1-(average_wo_outliers/100))^10)*100) 
 
 ggplot(attrition_rates, 
        aes(x = year, y = observatory_with_num, 
@@ -303,21 +326,16 @@ ggplot(attrition_rates,
   geom_text(aes(label = ifelse(is.na(attrition_rate), "", 
                                round(attrition_rate))), 
             color = "black", size = 2.5) +
-  scale_fill_gradient(low = "green", high = "red", na.value = "grey", name = "Attrition Rate (%)") +
-  theme_minimal() +
-  labs(x = "Year",
+  scale_fill_gradient2(low = "darkgreen", mid = "yellow", high = "red", 
+                       midpoint = 30, na.value = "grey", name = "Attrition Rate (%)") +
+labs(x = "Year",
        y = "Observatory (j0)") +
   theme_minimal() +
   labs(y = NULL, x = NULL) +
   theme(axis.text.y = element_text(size = 8)) 
-
 ```
 
-
-
-
-
-As we can see in the graph, attrition in particularly stron gin certain observatories. Marovoay, Toliara littoral seem to be the observatories were the panels were best maintained over time. Attrition on ROR data has been studied @gubert2008; @vaillant2013.
+Annual attrition rates superior to 80% for a specific observatory are likely to be induced by a change in the identification codes and we hope to be able to solve such issue later on. If we discard these outliers (attrition rates over 80%), we have an average attrition year of `r cat(average_wo_outliers)`% wich is very high, leading to a compound attrition rate of `r cat(compound_avg_10y)`% over 10 years. Attrition on ROR data has been studied @gubert2008; @vaillant2013.
 
 ### Administrative boundaries
 
