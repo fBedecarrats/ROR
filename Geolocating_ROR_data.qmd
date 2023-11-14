@@ -237,11 +237,13 @@ The code block above creates a data dictionnary, which you can download by click
 
 To assess the integrity of the panel data, we assess the attrition that characterizes it. That is, for each survey reiteration, we compute the percentage of household identified in the previous round that are still present in the subsequent round. This produces the following result:
 
-```{r attrition}
+```{r}
 #| label: fig-attrition-ror
 #| fig-cap: "Attrition rate of ROR panels per observatory and survey round"
 
 # Function to read and process each file
+# NB : j5 codes have been modified in 1996
+# so we need to replace the ones from 1995
 read_and_process <- function(year) {
   file_path <- file.path("Données ROR/enter", as.character(year), "res_deb.dta")
   data <- read_dta(file_path) %>%
@@ -255,42 +257,36 @@ consolidated_data <- map_dfr(years, read_and_process)
 
 # Remove duplicates and create the hh_all table
 hh_all <- consolidated_data %>%
+  mutate(year = as.numeric(year)) %>%
   distinct(j0, j5, year, .keep_all = TRUE) %>%
   arrange(j0, j5)
 
-# Creating a presence indicator
-hh_presence <- hh_all %>%
-  group_by(j0, j5) %>%
-  mutate(presence = list(year)) %>%
-  ungroup() %>%
-  distinct(j0, j5, year, .keep_all = TRUE) %>%
-  unnest(presence)
-
-# Function to calculate attrition rate
-calculate_attrition <- function(hh_current, hh_previous) {
-  if (length(hh_previous) == 0) {
-    return(NA)  # No attrition rate if there were no households in the previous year
-  }
-  attrition_rate <- length(intersect(hh_current, hh_previous)) / length(hh_previous)
-  return(attrition_rate * 100)  # Convert to percentage
-}
-
-# Preparing data for attrition rate calculation
-attrition_data <- hh_presence %>%
+hh_grouped <- hh_all %>%
   group_by(j0, year) %>%
-  summarise(households = list(j5), .groups = 'drop') %>%
+  summarise(j5_list = list(j5), .groups = 'drop') %>%
+  # Count the number of j5 in j5_list
+  mutate(j5_count = map_int(j5_list, length)) %>%
+  # Create a column to identify the most recent previous year with data for the same observatory
   group_by(j0) %>%
-  arrange(year) %>%
-  mutate(households_previous = lag(households))
+  mutate(previous_year = lag(year)) %>%
+  ungroup()
+  
+# Self-join to create previous_year_j5_list
+attrition_rates_detail <- hh_grouped %>%
+  left_join(hh_grouped %>% select(j0, year, 
+                                  previous_year_j5_list = j5_list,
+                                  j5_count_previous_year = j5_count), 
+            by = c("j0", "previous_year" = "year")) %>%
+  mutate(repeated_j5 = map_int(
+    seq_along(j5_list), 
+    ~length(intersect(j5_list[[.]], previous_year_j5_list[[.]]))),
+    attrition_rate = (j5_count_previous_year - repeated_j5) /
+      j5_count_previous_year * 100)
 
-# Calculate attrition rates
-attrition_rates <- attrition_data %>%
-  rowwise() %>%
-  mutate(attrition_rate = calculate_attrition(households, households_previous),
-         year = as.numeric(year)) %>%
-  select(j0, year, attrition_rate)
+
 # Pivot the data to have years as columns and observatory numbers as rows
-attrition_rates <- attrition_rates %>%
+attrition_rates <- attrition_rates_detail  %>%
+  select(j0, year, attrition_rate) %>%
   left_join(locations %>%
               mutate(observatory_with_num = paste0(seq_num, ". ", name),
                      observatory_with_num = fct_reorder(observatory_with_num, 
@@ -306,7 +302,7 @@ ggplot(attrition_rates,
   geom_tile() +  # Create the heatmap tiles
   geom_text(aes(label = ifelse(is.na(attrition_rate), "", 
                                round(attrition_rate))), 
-            color = "black", size = 3) +
+            color = "black", size = 2.5) +
   scale_fill_gradient(low = "green", high = "red", na.value = "grey", name = "Attrition Rate (%)") +
   theme_minimal() +
   labs(x = "Year",
@@ -314,7 +310,12 @@ ggplot(attrition_rates,
   theme_minimal() +
   labs(y = NULL, x = NULL) +
   theme(axis.text.y = element_text(size = 8)) 
+
 ```
+
+
+
+
 
 As we can see in the graph, attrition in particularly stron gin certain observatories. Marovoay, Toliara littoral seem to be the observatories were the panels were best maintained over time. Attrition on ROR data has been studied @gubert2008; @vaillant2013.
 
@@ -565,7 +566,7 @@ tm_shape(matched_spatial) +
 
 For observations where the field "municipality name" was empty (all cases before 2004 and still a frequent situation afterwards), we turned our attention to the village name field. The objective was to decipher whether these village names could potentially contain a municipality's name that had been previously pinpointed during the observatory surveys. For the observations with no municipality value, we teased out the first word or segment in the village name. This extracted word then underwent a process of fuzzy matching against the roster of identified municipalities' names. However, manual verification spotted errors. Certain matches, which we labeled 'false positives', emerged as errors and were purged from the results. Once this cleansing step was concluded, we included the validated matches back into the primary correspondence table.
 
-```{r}
+```{r method_2}
 # Filter out matched municipalities and extract the first word
 unmatched_results <- correspondence_table %>%
   filter(is.na(matched_string)) %>%
@@ -602,7 +603,7 @@ correspondence_table <- correspondence_table %>%
 
 With some observations still devoid of a matched municipality, we initiated another processing layer. This phase saw the unmatched village names being subjected to fuzzy matching against the populated places dataset described above. We first sifted out the unmatched results from our prior analysis. Then, we augmented the 'pop_places' dataset with observatory codes for the entries that were located in communes recognized as surveyed by observatories. Next we performed another fuzzy matching, comparing the village names against the 'pop_places' names. To maintain a level of precision, we set a restrictive threshold, dismissing any match that exceeded a certain "distance" or degree of difference. But, as with the previous methods, visual verification revealed some missmatches. These 'false positives' were flagged and discarded and the remaining ones were integrated into the overarching correspondence table.
 
-```{r}
+```{r method_3}
 # Re-filter unmatched results
 unmatched_results2 <- correspondence_table %>%
   filter(is.na(matched_string)) %>%
@@ -648,7 +649,7 @@ For the remaining, let's try matching with other village names for which municip
 
 Even after the above measures, there remained observations that had eluded a municipality match. The subsequent strategy was to juxtapose them with other village names that had already been successfully matched to a municipality. We assembled a dataset comprising of municipality names and their paired village names, using data from previous successful matches. UThen the still-unmatched village names were run through a fuzzy matching process against the known village names. We fine-tuned the algorithm with a restrictive matching threshold. Again, some matches stood out as anomalies. Labeled as 'false positives', these were sifted out and the newly matched data was incorporated into the main correspondence table.
 
-```{r}
+```{r method_4}
 # Create a list of municipality names and village names for matched observations
 matched_villages <- correspondence_table %>%
   filter(!is.na(method)) %>%
@@ -690,7 +691,7 @@ correspondence_table <- correspondence_table %>%
 
 After successfully matching commune names with an official, normalized reference, our next goal is to align the villages as identified by the ROR with their administrative counterpart, known as Fokontany. This task presents challenges, notably because the ROR's village identifications weren't directly linked to Fokontany names, and the Fokontany names themselves have undergone changes. Additionally, variations in village naming within the ROR dataset complicate the process. Our approach involves several steps: First, we load the official COD Fokontany dataset. Next, we standardize the place names using our previously discussed `clean_string` function. Then, using the purpose-built `fuzzy_match_village` function, we assess the similarity between the village names in the ROR dataset and the Fokontany names within the same commune, specifically by calculating the Jaro-Winkler distance between the strings. We the names with the highest degree of matching. During a manual review of these results, we closely examined the matches, especially those with larger Jaro-Winkler distance. From this examination, we derived a distance of 0.2, below which the majority of matches were accurate. Notably, some matches above this threshold were deemed accurate and retained, while a small number of matches below this threshold were identified as false positives and subsequently discarded.
 
-```{r}
+```{r join_fokontany}
 # Load the ADM4 dataset, which corresponds to Fokontany
 fokontany <- st_read("../Entités administratives/OCHA_BNGRC frontières administratives/mdg_admbnda_adm4_BNGRC_OCHA_20181031.shp",
                       quiet = TRUE) %>%
@@ -818,7 +819,7 @@ To ensure the robustness and validity of our georeferenced data, we employ a mul
 
 We first look at the distribution of the unique observations that were successfully matched during the various stages of the georeferencing process.
 
-```{r}
+```{r stats_methods}
 #| label: tbl-stats-matching
 #| tbl-cap: "Number of ROR observation which commune and village were matched"
 
@@ -879,7 +880,7 @@ gt(summarized_data)  %>%
 
 To ensure the comprehensiveness of our georeferencing process, we summarize the list of unique matches for villages from all the municipalities in the final dataset. This check will help ensure there are no glaring gaps in the matched data.
 
-```{r}
+```{r list_muni}
 #| label: tbl-list-muni
 #| tbl-cap: "List of fokontany per commune and observatory"
 
@@ -912,7 +913,7 @@ We compare this with the ROR documentation to assess which villages might have b
 
 We visually explore the the georeferenced data to observe its spatial distribution and spot eventual anomalies or clustering patterns that might not be immediately obvious from numerical summaries. The visualization below maps out our matched municipalities alongside villages. Discrepancies or clusters may indicate a need for further refinement or correction.
 
-```{r}
+```{r map_ror}
 #| label: fig-map-final
 #| fig-cap: "Map of the surveyed communes and fokonany in protected areas vicinity"
 
