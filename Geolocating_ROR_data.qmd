@@ -194,6 +194,7 @@ Vahatra <- st_read("../Aires protégées/Vahatra/Shapefiles/AP_Vahatra.shp",
                    quiet = TRUE) %>%
   st_make_valid() %>%
   mutate(label = "Protected area__")
+tmap_mode("view")
 obs_communes2 %>%
   filter(!is.na(OBS_NAME)) %>%
   tm_shape() +
@@ -206,7 +207,7 @@ We have the following time frame for observatories neighbouring Protected areas:
 
 ```{r}
 #| label: fig-ror-pa-years
-#| fig-cap: "Coarse location of rural observatory and survey years"
+#| fig-cap: "Timing of ROR surveys and neigbouring PA creations"
 
 Vahatra <- Vahatra %>%
   mutate(nom = ifelse(str_starts(nom, "Corridor Forestier Ambositra-Vondrozo"),
