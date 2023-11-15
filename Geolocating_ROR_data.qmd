@@ -107,10 +107,10 @@ obs_count_wide <- obs_count %>%
 locations <- tibble(
   code = c(1, 2, 3, 4, 12, 13, 15, 16, 21, 22, 23, 24, 31, 25, 41, 42, 43, 51, 
            44, 45, 61, 17, 18, 19, 71, 52),
-  name = c("Antalaha", "Antsirabe", "Marovoay", "Toliara", "Antsohihy", 
-           "Tsiroanomandidy-Bongo", "Farafangana", "Ambovombe", 
-           "Alaotra", "Manjakandriana", "Toliara littoral", 
-           "Fenerive Est", "Bekily", "Mahanoro", "Soaviandriana-Itasy", 
+  name = c("Antalaha", "Antsirabe", "Marovoay", "Toliara littoral", "Antsohihy", 
+           "Tsiroanomandidy", "Farafangana", "Ambovombe", 
+           "Alaotra", "Manjakandriana", "Toliara Nord", 
+           "Fenerive Est", "Bekily", "Mahanoro", "Itasy", 
            "Menabe-Belo", "Fianarantsoa", "Tsivory", "Morondava", "Manandriana", 
            "Tanandava", "Ihosy", "Ambohimahasoa", "Manakara", "Tolanaro", 
            "Menabe-Nord-Est"),
@@ -182,6 +182,103 @@ CODs stand as the bedrock for all preparedness and response operations, especial
 
 P-codes act as reliable geographic identifiers, eliminating errors arising from identical or variably spelled geographic locations. Leveraging the HDX platform, an open platform for cross-crisis data sharing, we fetch this data to ensure the accurate georeferencing of our ROR data. By harnessing the standardized and official spelling of places provided by P-codes, we can amalgamate, harmonize, and analyze data from diverse sources, offering a comprehensive, geo-accurate view of the survey's findings.
 
+### Potential use of the data
+
+Example for the evaluation of protected areas.
+
+```{r}
+obs_communes2 <- st_read(
+  "data/observatoires/Observatoires_ROR_communes_COD_v2.gpkg",
+  quiet = TRUE)
+Vahatra <- st_read("../Aires protégées/Vahatra/Shapefiles/AP_Vahatra.shp", 
+                   quiet = TRUE) %>%
+  st_make_valid() %>%
+  mutate(label = "Protected area__")
+obs_communes2 %>%
+  filter(!is.na(OBS_NAME)) %>%
+  tm_shape() +
+  tm_polygons(col = "OBS_NAME") +
+  tm_shape(Vahatra) +
+  tm_fill(col = "darkgreen", alpha = 0.3)
+```
+
+We have the following time frame for observatories neighbouring Protected areas:
+
+```{r}
+#| label: fig-ror-pa-years
+#| fig-cap: "Coarse location of rural observatory and survey years"
+
+Vahatra <- Vahatra %>%
+  mutate(nom = ifelse(str_starts(nom, "Corridor Forestier Ambositra-Vondrozo"),
+                      "Corridor Forestier Ambositra-Vondrozo", nom))
+
+obs_PA <- tibble::tribble(
+       ~Observatory_name,                                ~PA_Name,
+              "Marovoay",                        "Ankarafantsika",
+               "Alaotra",                           "Lac Alaotra",
+               "Alaotra",          "Corridor Ankeniheny Zahamena",
+           "Menabe-Belo",                       "Menabe Antimena",
+         "Ambohimahasoa",                            "Ranomafana",
+         "Ambohimahasoa", "Corridor Forestier Ambositra-Vondrozo",
+          "Fianarantsoa", "Corridor Forestier Ambositra-Vondrozo",
+             "Tanandava", "Complexe Zones Humides Mangoky Ihotry",
+          "Toliara Nord",                                 "Mikea",
+      "Toliara littoral",                       "Tsimanampesotsa",
+              "Tolanaro",                            "Andohahela",
+               "Tsivory",                  "Vohidava-Betsimalaho")
+
+
+
+# Combine the PA name and observatory name into a single label for faceting
+obs_PA <- obs_PA %>%
+  mutate(facet_label = paste(PA_Name, "-", Observatory_name))
+
+# Fetch Survey Years and add as a new column in obs_PA
+obs_PA1 <- obs_PA %>%
+  rowwise() %>%
+  mutate(year = Vahatra %>%
+      filter(nom == PA_Name) %>%
+      pull(an_crtn) %>%
+      unique(),
+    year_type = "PA creation year",
+    dot_size = 3) %>%
+  ungroup()
+
+obs_PA2 <- obs_PA %>%
+  rowwise() %>%
+  mutate(year = list(
+    obs_count %>%
+      filter(observatory_name == Observatory_name) %>%
+      pull(year)),
+    year_type = "ROR survey year",
+    dot_size = 2) %>%
+  ungroup() %>%
+  unnest(year)
+
+obs_PA <- bind_rows(obs_PA1, obs_PA2)
+
+# Create the facet plot
+ggplot(obs_PA, aes(x = year, y = facet_label)) +
+  geom_point(aes(color = year_type, size = dot_size)) +
+  scale_color_manual(
+    values = c("ROR survey year" = "blue", "PA creation year" = "red"),
+    name = "",
+    labels = c("ROR survey year", "PA creation year")
+  )+
+  scale_size(
+    range = c(2, 4),
+    guide = "none"  # This removes the size scale from the legend
+  ) +
+  scale_x_continuous(limits = c(1990, 2015)) +
+  theme_minimal() +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        legend.position = "top")
+```
+
+As it can be seen here, the Ranomanfana protected area that was created well before the ROR surveys. Two protected areas where created during ROR survey years: Ankarafantsika protected area (Marovoay observatory) and Mikea (Toliara Nord observatory). 8 other protected areas were created after the ROR surveys had stoped: Vohidava, Tsimanampesotsoa, Menabe Antinmena, Lac Alaotra, Corridor Forestier Abositra-Vodronzo, Corridor Ankeniheny Zahamena, Complexe Zones Humides Mangoky Ihotry and Andohahela.
+
+
 ## Data Description and Initial Exploration with R
 
 ### ROR survey data
@@ -235,7 +332,8 @@ The code block above creates a data dictionnary, which you can download by click
 
 ### Panel attrition
 
-To assess the integrity of the panel data, we assess the attrition that characterizes it. That is, for each survey reiteration, we compute the percentage of household identified in the previous round that are still present in the subsequent round. This produces the following result:
+To assess the integrity of the panel data, we assess the attrition that characterizes it. That is, for each survey reiteration, we compute the percentage of household identified in the previous round that are still present in the subsequent round. Some adjustment must be made as households identification numbering system habe been reshuffled between 1995 and 1996. We also have to remove 2005 survey in Marovoay from the analysis, as this was a specific tracking survey intended to identify individuals from households that could not be re-interviewed in the previous years in one of the observatory sites [@vaillant2013].
+This produces the following result:
 
 ```{r}
 #| label: fig-attrition-ror
@@ -335,7 +433,7 @@ labs(x = "Year",
   theme(axis.text.y = element_text(size = 8)) 
 ```
 
-Annual attrition rates superior to 80% for a specific observatory are likely to be induced by a change in the identification codes and we hope to be able to solve such issue later on. If we discard these outliers (attrition rates over 80%), we have an average attrition year of `r cat(average_wo_outliers)`% wich is very high, leading to a compound attrition rate of `r cat(compound_avg_10y)`% over 10 years. Attrition on ROR data has been studied @gubert2008; @vaillant2013.
+Annual attrition rates superior to 80% for a specific observatory are likely to be induced by new reshuffles of the household identification codes and we hope to be able to solve such issue later on. If we discard these outliers (attrition rates over 80%), we have an average attrition year of `r cat(average_wo_outliers)`% wich is very high, leading to a compound attrition rate of `r cat(compound_avg_10y)`% over 10 years. Attrition on ROR data has been studied @gubert2008; @vaillant2013.
 
 ### Administrative boundaries
 
@@ -350,7 +448,7 @@ The "Madagascar Populated Places" dataset is also part of the Common Operational
 ROR_surveys_2007 <- read_dta("Données ROR/enter/2007/res_deb.dta")
 observatory_names <- read_xlsx("Observatory_names.xlsx")
 obs_communes <- st_read(
-  "data/observatoires/Observatoires_ROR_communes_COD.gpkg",
+  "data/observatoires/Observatoires_ROR_communes_COD_v2.gpkg",
   quiet = TRUE) %>%
   left_join(select(observatory_names, name, code), 
             by = c("OBS_NAME" = "name")) %>%
